@@ -313,11 +313,11 @@ function render_menu() {
 
       $show_this_module = TRUE;
       if ($VALIDATED == TRUE) {
-       if ($access == 'hidden_on_login') { $show_this_module = FALSE; }
-       if ($IS_ADMIN == FALSE and $access == 'admin' ){ $show_this_module = FALSE; }
+       if ($access == 'hidden_on_login' && $access != 'always') { $show_this_module = FALSE; }
+       if ($IS_ADMIN == FALSE and $access == 'admin' && $access != 'always'){ $show_this_module = FALSE; }
       }
       else {
-       if ($access != 'hidden_on_login') { $show_this_module = FALSE; }
+       if ($access != 'hidden_on_login' && $access != 'always') { $show_this_module = FALSE; }
       }
       #print "<p>$module - access is $access & show is $show_this_module</p>";
       if ($show_this_module == TRUE ) {

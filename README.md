@@ -209,6 +209,7 @@ To send emails you'll need to use an existing SMTP server.  Email sending will b
    
 * `ACCOUNT_REQUESTS_EMAIL` (default: *{EMAIL_FROM_ADDRESS}*): This is the email address that any requests for a new account are sent to.
 
+* `ACCOUNT_REQUESTS_ALWAYS_SHOW` (default: *FALSE*): Set to TRUE in order to always show the Account Request form. This requires `ACCOUNT_REQUESTS_ENABLED` to be set to TRUE to have any effect.
 
 #### Website customization
 

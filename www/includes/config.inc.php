@@ -156,6 +156,10 @@
    error_log("$log_prefix Config: ACCOUNT_REQUESTS_ENABLED was set to TRUE but SMTP_HOSTNAME wasn't set, so account requesting has been disabled as we can't send out the request email",0);
  }
 
+ $ACCOUNT_REQUESTS_ALWAYS_SHOW = ((strcasecmp(getenv('ACCOUNT_REQUESTS_ALWAYS_SHOW'),'TRUE') == 0) ? TRUE : FALSE);
+ if ($ACCOUNT_REQUESTS_ENABLED == FALSE) {
+    $ACCOUNT_REQUESTS_ALWAYS_SHOW = FALSE;
+ }
  $ACCOUNT_REQUESTS_EMAIL = (getenv('ACCOUNT_REQUESTS_EMAIL') ? getenv('ACCOUNT_REQUESTS_EMAIL') : $EMAIL['from_address']);
 
 
