@@ -6,10 +6,10 @@ php_dir="/opt/ldap_user_manager"
 
 # Function to handle environment variable _FILE replacements
 env_file_replace() {
-  for env_file in $(env|grep _FILE=); do
+  for env_file in $(env | grep _FILE=); do
     read -a env <<< "$(echo "$env_file" | sed 's/\(.*\)_FILE=\(.*\)/\1 \2/')"
     if [ -s "${env[1]}" ]; then
-      echo Setting "${env[0]}" from "${env[1]}"
+      echo "Setting ${env[0]} from ${env[1]}"
       export "${env[0]}"="$(cat "${env[1]}")"
     else
       echo "${env[1]} does not exist or is empty. Leaving ${env[0]} unset"
@@ -17,21 +17,53 @@ env_file_replace() {
   done
 }
 
-if [ ! "$SERVER_HOSTNAME" ]; then export SERVER_HOSTNAME="ldapusermanager.org"; fi
-if [ ! "$SERVER_PATH" ]; then
-  export SERVER_PATH="/";
+# Set default PUID and PGID if not provided
+PUID=${PUID:-1000}
+PGID=${PGID:-1000}
+
+# Create a group and user if they don't already exist
+if ! getent group appgroup >/dev/null; then
+  groupadd -g "${PGID}" appgroup
+fi
+if ! id -u appuser >/dev/null 2>&1; then
+  useradd -u "${PUID}" -g appgroup -m appuser
+fi
+
+# Ensure proper permissions on php_dir if writable
+if [ -w "$php_dir" ]; then
+  chown -R appuser:appgroup "$php_dir"
+else
+  echo "$php_dir is read-only, skipping chown operation"
+fi
+
+# Export environment variables for Apache
+export APACHE_RUN_USER=appuser
+export APACHE_RUN_GROUP=appgroup
+
+# Run environment file replacements
+env_file_replace
+
+# Set default SERVER_HOSTNAME if not provided
+if [ -z "$SERVER_HOSTNAME" ]; then
+  export SERVER_HOSTNAME="ldapusermanager.org"
+fi
+if [ -z "$SERVER_PATH" ]; then
+  export SERVER_PATH="/"
   apache_alias=""
 else
   apache_alias="Alias $SERVER_PATH $php_dir"
 fi
 
-#If LDAP_TLS_CACERT is set then write it out as a file
-#and set up the LDAP client conf to use it.
-
-if [ "$LDAP_TLS_CACERT" ]; then
-  echo "$LDAP_TLS_CACERT" >/opt/ca.crt
-  mkdir -p /etc/ldap  
-  sed -i "s/TLS_CACERT.*/TLS_CACERT \/opt\/ca.crt/" /etc/ldap/ldap.conf
+# If LDAP_TLS_CACERT is set, write it out as a file
+if [ -n "$LDAP_TLS_CACERT" ]; then
+  if [ -w /tmp ]; then
+    echo "$LDAP_TLS_CACERT" >/tmp/ca.crt
+    mkdir -p /etc/ldap
+    sed -i "s|TLS_CACERT.*|TLS_CACERT /tmp/ca.crt|" /etc/ldap/ldap.conf
+  else
+    echo "/tmp is not writable, cannot write LDAP_TLS_CACERT"
+    exit 1
+  fi
 fi
 
 if [ "${NO_HTTPS,,}" == "true" ]; then
@@ -57,7 +89,7 @@ EoHTTPC
 else
 
   ########################
-  #If there aren't any SSL certs then create a CA and then CA-signed certificate
+  # If there aren't any SSL certs, create a CA and then CA-signed certificate
 
   if [ ! -f "${ssl_dir}/${SERVER_CERT_FILENAME:-server.crt}" ] && [ ! -f "${ssl_dir}/${SERVER_KEY_FILENAME:-server.key}" ]; then
 
@@ -123,14 +155,14 @@ EoCertConf
 
 
   ########################
-  #Create Apache config
+  # Create Apache config
 
   if [ -f "${ssl_dir}/${CA_CERT_FILENAME}" ]; then ssl_chain="SSLCertificateChainFile ${ssl_dir}/${CA_CERT_FILENAME}"; fi
 
   echo  > /etc/apache2/sites-enabled/lum.conf
   echo  > /etc/apache2/ports.conf
 
-  if [ ! "$SERVER_PORT" ]; then
+  if [ -z "$SERVER_PORT" ]; then
 
     echo "Listen 80" > /etc/apache2/ports.conf
 
@@ -174,11 +206,11 @@ EoHTTPSC
 fi
 
 ########################
-#Run Apache
+# Run Apache
 
-# first arg is `-f` or `--some-option`
+# First arg is `-f` or `--some-option`
 if [ "${1#-}" != "$1" ]; then
         set -- apache2-foreground "$@"
 fi
 
-exec "$@"
+exec gosu appuser "$@"
