@@ -54,15 +54,12 @@ else
   apache_alias="Alias $SERVER_PATH $php_dir"
 fi
 
-# If LDAP_TLS_CACERT is set, write it out as a file
+# If LDAP_TLS_CACERT is set, verify it's already configured
 if [ -n "$LDAP_TLS_CACERT" ]; then
-  if [ -w /tmp ]; then
-    echo "$LDAP_TLS_CACERT" >/tmp/ca.crt
-    mkdir -p /etc/ldap
-    sed -i "s|TLS_CACERT.*|TLS_CACERT /tmp/ca.crt|" /etc/ldap/ldap.conf
+  if [ -f /etc/ldap/ldap.conf ] && grep -q "TLS_CACERT /opt/ca.crt" /etc/ldap/ldap.conf; then
+    echo "LDAP_TLS_CACERT is already configured in /etc/ldap/ldap.conf"
   else
-    echo "/tmp is not writable, cannot write LDAP_TLS_CACERT"
-    exit 1
+    echo "Skipping modification of /etc/ldap/ldap.conf as it is preconfigured or not writable"
   fi
 fi
 
