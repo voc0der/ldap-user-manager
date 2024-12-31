@@ -12,7 +12,7 @@ RUN apt-get update && \
 # Configure and install PHP extensions as root
 RUN docker-php-ext-configure gd --with-freetype && \
     docker-php-ext-install -j$(nproc) gd && \
-    libdir=$(find /usr -name "libldap.so*" | sed -e 's/\\/usr\\///' -e 's/\\/libldap.so//') && \
+    libdir=$(find /usr -name "libldap.so*" | sed -e 's#/usr/##' -e 's#/libldap.so##') && \
     docker-php-ext-configure ldap --with-libdir=$libdir && \
     docker-php-ext-install -j$(nproc) ldap
 
