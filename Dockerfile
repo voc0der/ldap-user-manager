@@ -23,6 +23,15 @@ RUN tar -xzf /tmp/v6.3.0.tar.gz -C /opt && mv /opt/PHPMailer-6.3.0 /opt/PHPMaile
 # Enable Apache modules
 RUN a2enmod rewrite ssl && a2dissite 000-default default-ssl
 
+# Pre-bake Apache configuration
+RUN echo "<VirtualHost *:80>\n \
+    ServerName ldapusermanager.org\n \
+    DocumentRoot /opt/ldap_user_manager\n \
+    <Directory /opt/ldap_user_manager>\n \
+      Require all granted\n \
+    </Directory>\n \
+  </VirtualHost>" > /etc/apache2/sites-enabled/lum.conf
+
 # Expose ports
 EXPOSE 80
 EXPOSE 443
