@@ -29,8 +29,14 @@ if ! id -u appuser >/dev/null 2>&1; then
   useradd -u "${PUID}" -g appgroup -m appuser
 fi
 
-# Ensure proper permissions on directories
-chown -R appuser:appgroup "$php_dir" "$ssl_dir"
+# Ensure proper permissions on directories if writable
+chown -R appuser:appgroup "$php_dir"
+
+if [ -w "$ssl_dir" ]; then
+  chown -R appuser:appgroup "$ssl_dir"
+else
+  echo "$ssl_dir is read-only, skipping chown operation"
+fi
 
 # Export environment variables for Apache
 export APACHE_RUN_USER=appuser
