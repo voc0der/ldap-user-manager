@@ -25,8 +25,14 @@ RUN tar -xzf /tmp/v6.3.0.tar.gz -C /opt && mv /opt/PHPMailer-6.3.0 /opt/PHPMaile
 RUN a2enmod rewrite ssl && a2dissite 000-default default-ssl
 
 # Pre-bake Apache configuration
-RUN echo "<VirtualHost *:80>\n \
-    ServerName ldapusermanager.org\n \
+ARG LDAP_SERVER_NAME=localhost
+RUN echo "ServerName ${LDAP_SERVER_NAME}" >> /etc/apache2/apache2.conf && \
+    echo "<VirtualHost *:80>\n \
+    ServerName ${LDAP_SERVER_NAME}\n \
+    Redirect permanent / https://${LDAP_SERVER_NAME}/\n \
+  </VirtualHost>" > /etc/apache2/sites-enabled/redirect.conf && \
+    echo "<VirtualHost *:443>\n \
+    ServerName ${LDAP_SERVER_NAME}\n \
     DocumentRoot /opt/ldap_user_manager\n \
     <Directory /opt/ldap_user_manager>\n \
       Require all granted\n \
