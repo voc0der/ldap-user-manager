@@ -6,7 +6,8 @@ RUN apt-get update && \
         libldb-dev libldap2-dev libldap-common \
         libfreetype6-dev \
         libjpeg-dev \
-        libpng-dev && \
+        libpng-dev \
+        gosu && \  # Install gosu for user switching
     rm -rf /var/lib/apt/lists/*
 
 # Configure and install PHP extensions
