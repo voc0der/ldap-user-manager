@@ -1,4 +1,14 @@
 FROM php:8-apache
+ARG PUID=1000
+ARG PGID=1000
+
+RUN groupadd -g ${PGID} appgroup && \
+    useradd -u ${PUID} -g appgroup -m appuser && \
+    mkdir -p /home/appuser && \
+    chown -R appuser:appgroup /home/appuser && \
+    chown -R appuser:appgroup /opt/ldap_user_manager
+
+USER appuser
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
