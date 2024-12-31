@@ -55,7 +55,7 @@ RUN chmod a+x /usr/local/bin/entrypoint
 
 # Set up /etc/ldap/ldap.conf during build to avoid runtime changes
 RUN mkdir -p /etc/ldap && \
-    echo "TLS_CACERT /opt/ca.crt" > /etc/ldap/ldap.conf
+    echo "TLS_CACERT /opt/ssl/ca.crt" > /etc/ldap/ldap.conf
 
 # Set up user and group with PUID and PGID
 ARG PUID=1000
