@@ -44,6 +44,14 @@ export APACHE_RUN_GROUP=appgroup
 
 # Run environment file replacements
 env_file_replace
+echo "Environment variables after env_file_replace:"
+env | grep LDAP_ADMIN_BIND_PWD
+
+# Explicitly source the secret file as a fallback
+if [ -f "/docker-secrets/standard" ]; then
+  export LDAP_ADMIN_BIND_PWD="$(cat /docker-secrets/standard)"
+  echo "Explicitly set LDAP_ADMIN_BIND_PWD: $LDAP_ADMIN_BIND_PWD"
+fi
 
 # Debugging: Log all environment variables for review
 echo "Dumping environment variables to /tmp/container_env.log"
