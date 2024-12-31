@@ -43,11 +43,6 @@ fi
 export APACHE_RUN_USER=appuser
 export APACHE_RUN_GROUP=appgroup
 
-# Run environment file replacements
-env_file_replace
-echo "Environment variables after env_file_replace:"
-env | grep LDAP_ADMIN_BIND_PWD
-
 # Explicitly source the secret file as a fallback
 if [ -f "/docker-secrets/standard" ]; then
   export LDAP_ADMIN_BIND_PWD="$(cat /docker-secrets/standard)"
@@ -91,6 +86,9 @@ if [ "${NO_HTTPS,,}" == "true" ]; then
 else
   echo "SSL setup already handled during build, skipping"
 fi
+
+# Run environment file replacements
+env_file_replace
 
 ########################
 # Run Apache
