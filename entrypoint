@@ -7,7 +7,7 @@ php_dir="/opt/ldap_user_manager"
 # Function to handle environment variable _FILE replacements
 env_file_replace() {
   for env_file in $(env | grep _FILE=); do
-    read -a env <<< "$(echo "$env_file" | sed 's/\(.*\)_FILE=\(.*\)/\1 \2/')"
+    read -a env <<< "$(echo "$env_file" | sed 's/\\(.*\\)_FILE=\\(.*\\)/\\1 \\2/')"
     if [ -s "${env[1]}" ]; then
       echo "Setting ${env[0]} from ${env[1]}"
       export "${env[0]}"="$(cat "${env[1]}")"
@@ -54,7 +54,7 @@ else
   apache_alias="Alias $SERVER_PATH $php_dir"
 fi
 
-# If LDAP_TLS_CACERT is set, verify it's already configured
+# Verify LDAP_TLS_CACERT configuration
 if [ -n "$LDAP_TLS_CACERT" ]; then
   if [ -f /etc/ldap/ldap.conf ] && grep -q "TLS_CACERT /opt/ca.crt" /etc/ldap/ldap.conf; then
     echo "LDAP_TLS_CACERT is already configured in /etc/ldap/ldap.conf"
@@ -63,11 +63,18 @@ if [ -n "$LDAP_TLS_CACERT" ]; then
   fi
 fi
 
-# Skip Apache site configuration as it is pre-baked in the Dockerfile
+# Confirm Apache configuration
 if [ -f /etc/apache2/sites-enabled/lum.conf ]; then
   echo "Apache site configuration already exists, skipping"
 else
   echo "Warning: Apache site configuration not found, please ensure it is baked into the image."
+fi
+
+# Handle HTTPS configuration dynamically if necessary
+if [ "${NO_HTTPS,,}" == "true" ]; then
+  echo "Running in HTTP-only mode, skipping SSL setup"
+else
+  echo "SSL setup already handled during build, skipping"
 fi
 
 ########################
