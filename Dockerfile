@@ -1,13 +1,4 @@
 FROM php:8-apache
-ARG PUID=1000
-ARG PGID=1000
-
-RUN groupadd -g ${PGID} appgroup && \
-    useradd -u ${PUID} -g appgroup -m appuser && \
-    mkdir -p /home/appuser && \
-    chown -R appuser:appgroup /home/appuser && \
-    chown -R appuser:appgroup /opt/ldap_user_manager
-
 USER appuser
 
 RUN apt-get update && \
@@ -36,6 +27,15 @@ RUN tar -xzf /tmp/v6.3.0.tar.gz -C /opt && mv /opt/PHPMailer-6.3.0 /opt/PHPMaile
 
 COPY entrypoint /usr/local/bin/entrypoint
 RUN chmod a+x /usr/local/bin/entrypoint && touch /etc/ldap/ldap.conf
+
+ARG PUID=1000
+ARG PGID=1000
+
+RUN groupadd -g ${PGID} appgroup && \
+    useradd -u ${PUID} -g appgroup -m appuser && \
+    mkdir -p /home/appuser && \
+    chown -R appuser:appgroup /home/appuser && \
+    chown -R appuser:appgroup /opt/ldap_user_manager
 
 CMD ["apache2-foreground"]
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
