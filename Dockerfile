@@ -37,6 +37,9 @@ RUN echo "ServerName ${LDAP_SERVER_NAME}" >> /etc/apache2/apache2.conf && \
     <Directory /opt/ldap_user_manager>\n \
       Require all granted\n \
     </Directory>\n \
+    SSLEngine On\n \
+    SSLCertificateFile /path/to/your/certificate.crt\n \
+    SSLCertificateKeyFile /path/to/your/private.key\n \
   </VirtualHost>" > /etc/apache2/sites-enabled/lum.conf
 
 # Expose ports
