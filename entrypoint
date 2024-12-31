@@ -7,10 +7,12 @@ php_dir="/opt/ldap_user_manager"
 # Function to handle environment variable _FILE replacements
 env_file_replace() {
   for env_file in $(env | grep _FILE=); do
+    # Extract the variable name and file path
     read -a env <<< "$(echo "$env_file" | sed 's/\\(.*\\)_FILE=\\(.*\\)/\\1 \\2/')"
     if [ -s "${env[1]}" ]; then
       echo "Setting ${env[0]} from ${env[1]}"
       export "${env[0]}"="$(cat "${env[1]}")"
+      echo "Exported ${env[0]} with value: $(eval echo \$$env[0])"
     else
       echo "${env[1]} does not exist or is empty. Leaving ${env[0]} unset"
     fi
@@ -42,6 +44,10 @@ export APACHE_RUN_GROUP=appgroup
 
 # Run environment file replacements
 env_file_replace
+
+# Debugging: Log all environment variables for review
+echo "Dumping environment variables to /tmp/container_env.log"
+env > /tmp/container_env.log
 
 # Set default SERVER_HOSTNAME if not provided
 if [ -z "$SERVER_HOSTNAME" ]; then
@@ -85,5 +91,5 @@ if [ "${1#-}" != "$1" ]; then
         set -- apache2-foreground "$@"
 fi
 
-# Remove gosu and directly execute the command
+# Execute the command directly
 exec "$@"
