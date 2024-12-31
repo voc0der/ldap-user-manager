@@ -32,7 +32,11 @@ COPY www/ /opt/ldap_user_manager
 
 # Add and set permissions for the entrypoint script
 COPY entrypoint /usr/local/bin/entrypoint
-RUN chmod a+x /usr/local/bin/entrypoint && touch /etc/ldap/ldap.conf
+RUN chmod a+x /usr/local/bin/entrypoint
+
+# Set up /etc/ldap/ldap.conf during build to avoid runtime changes
+RUN mkdir -p /etc/ldap && \
+    echo "TLS_CACERT /opt/ca.crt" > /etc/ldap/ldap.conf
 
 # Set up user and group with PUID and PGID
 ARG PUID=1000
