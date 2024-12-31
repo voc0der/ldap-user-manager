@@ -7,7 +7,7 @@ RUN apt-get update && \
         libfreetype6-dev \
         libjpeg-dev \
         libpng-dev \
-        gosu && \  # Install gosu for user switching
+        gosu && \
     rm -rf /var/lib/apt/lists/*
 
 # Configure and install PHP extensions
