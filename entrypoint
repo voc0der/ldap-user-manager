@@ -55,29 +55,6 @@ else
   apache_alias="Alias $SERVER_PATH $php_dir"
 fi
 
-# Verify LDAP_TLS_CACERT configuration
-if [ -n "$LDAP_TLS_CACERT" ]; then
-  if [ -f /etc/ldap/ldap.conf ] && grep -q "TLS_CACERT /opt/ca.crt" /etc/ldap/ldap.conf; then
-    echo "LDAP_TLS_CACERT is already configured in /etc/ldap/ldap.conf"
-  else
-    echo "Skipping modification of /etc/ldap/ldap.conf as it is preconfigured or not writable"
-  fi
-fi
-
-# Confirm Apache configuration
-if [ -f /etc/apache2/sites-enabled/lum.conf ]; then
-  echo "Apache site configuration already exists, skipping"
-else
-  echo "Warning: Apache site configuration not found, please ensure it is baked into the image."
-fi
-
-# Handle HTTPS configuration dynamically if necessary
-if [ "${NO_HTTPS,,}" == "true" ]; then
-  echo "Running in HTTP-only mode, skipping SSL setup"
-else
-  echo "SSL setup already handled during build, skipping"
-fi
-
 # Run environment file replacements
 env_file_replace
 
