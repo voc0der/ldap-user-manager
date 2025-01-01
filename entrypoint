@@ -40,10 +40,6 @@ fi
 export APACHE_RUN_USER=appuser
 export APACHE_RUN_GROUP=appgroup
 
-# Debugging: Log all environment variables for review
-echo "Dumping environment variables to /tmp/container_env.log"
-env > /tmp/container_env.log
-
 # Set default SERVER_HOSTNAME if not provided
 if [ -z "$SERVER_HOSTNAME" ]; then
   export SERVER_HOSTNAME="ldapusermanager.org"
