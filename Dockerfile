@@ -38,8 +38,8 @@ RUN echo "ServerName ${LDAP_SERVER_NAME}" >> /etc/apache2/apache2.conf && \
       Require all granted\n \
     </Directory>\n \
     SSLEngine On\n \
-    SSLCertificateFile /opt/ssl/localhost.crt\n \
-    SSLCertificateKeyFile /opt/ssl/localhost.key\n \
+    SSLCertificateFile /opt/ssl/${SERVER_CERT_FILENAME}\n \
+    SSLCertificateKeyFile /opt/ssl/${SERVER_KEY_FILENAME}\n \
   </VirtualHost>" > /etc/apache2/sites-enabled/lum.conf
 
 # Expose ports
@@ -55,7 +55,7 @@ RUN chmod a+x /usr/local/bin/entrypoint
 
 # Set up /etc/ldap/ldap.conf during build to avoid runtime changes
 RUN mkdir -p /etc/ldap && \
-    echo "TLS_CACERT /opt/ssl/ca.crt" > /etc/ldap/ldap.conf
+    echo "TLS_CACERT /opt/ssl/${LDAP_TLS_CACERT}" > /etc/ldap/ldap.conf
 
 # Set up user and group with PUID and PGID
 ARG PUID=1000
