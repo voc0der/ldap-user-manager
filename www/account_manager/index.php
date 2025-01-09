@@ -14,9 +14,8 @@ $ldap_connection = open_ldap_connection();
 
 if (isset($_POST['delete_user'])) {
 
-  $this_user = $_POST['delete_user'];
-  $this_user = urldecode($this_user);
-
+  $this_user = htmlspecialchars(urldecode($_POST['delete_user']), ENT_QUOTES, 'UTF-8');
+  
   $del_user = ldap_delete_account($ldap_connection,$this_user);
 
   if ($del_user) {
