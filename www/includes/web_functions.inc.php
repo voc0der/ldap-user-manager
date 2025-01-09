@@ -251,6 +251,8 @@ function render_header($title="",$menu=TRUE) {
 
  if (empty($title)) { $title = $SITE_NAME; }
 
+ $email_domain = getenv('EMAIL_DOMAIN') ?: 'default-domain.com';
+
  #Initialise the HTML output for the page.
 
  ?>
@@ -259,7 +261,7 @@ function render_header($title="",$menu=TRUE) {
  <TITLE><?php print "$title"; ?></TITLE>
  <meta charset="utf-8">
  <meta name="viewport" content="width=device-width, initial-scale=1">
- <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://getenv('EMAIL_DOMAIN'); font-src 'self' https://getenv('EMAIL_DOMAIN');">
+ <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://<?php echo htmlspecialchars($email_domain, ENT_QUOTES, 'UTF-8'); ?>; font-src 'self' https://<?php echo htmlspecialchars($email_domain, ENT_QUOTES, 'UTF-8'); ?>;">
  <link rel="stylesheet" href="<?php print $SERVER_PATH; ?>bootstrap/css/bootstrap.min.css">
  <?php if ($CUSTOM_STYLES) echo '<link rel="stylesheet" href="'.$CUSTOM_STYLES.'">' ?>
  <script src="<?php print $SERVER_PATH; ?>js/jquery-3.6.0.min.js"></script>
