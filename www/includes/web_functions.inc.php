@@ -259,6 +259,7 @@ function render_header($title="",$menu=TRUE) {
  <TITLE><?php print "$title"; ?></TITLE>
  <meta charset="utf-8">
  <meta name="viewport" content="width=device-width, initial-scale=1">
+ <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' <?php echo $CUSTOM_STYLES ? htmlspecialchars($CUSTOM_STYLES, ENT_QUOTES, 'UTF-8') : ''; ?>">
  <link rel="stylesheet" href="<?php print $SERVER_PATH; ?>bootstrap/css/bootstrap.min.css">
  <?php if ($CUSTOM_STYLES) echo '<link rel="stylesheet" href="'.$CUSTOM_STYLES.'">' ?>
  <script src="<?php print $SERVER_PATH; ?>js/jquery-3.6.0.min.js"></script>
