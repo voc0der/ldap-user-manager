@@ -25,9 +25,9 @@ RUN tar -xzf /tmp/v6.3.0.tar.gz -C /opt && mv /opt/PHPMailer-6.3.0 /opt/PHPMaile
 RUN a2enmod rewrite ssl && a2dissite 000-default default-ssl
 
 # Pre-bake Apache configuration
-ARG SERVER_CERT_FILENAME=cert.crt
-ARG SERVER_KEY_FILENAME=privkey.pem
-ARG LDAP_SERVER_NAME=localhost
+ENV SERVER_CERT_FILENAME=cert.crt
+ENV SERVER_KEY_FILENAME=privkey.pem
+ENV LDAP_SERVER_NAME=localhost
 RUN echo "ServerName ${LDAP_SERVER_NAME}" >> /etc/apache2/apache2.conf && \
     echo "<VirtualHost *:80>\n \
     ServerName ${LDAP_SERVER_NAME}\n \
