@@ -25,8 +25,8 @@ RUN tar -xzf /tmp/v6.3.0.tar.gz -C /opt && mv /opt/PHPMailer-6.3.0 /opt/PHPMaile
 RUN a2enmod rewrite ssl && a2dissite 000-default default-ssl
 
 # Pre-bake Apache configuration
-ARG SERVER_CERT_FILENAME=localhost-1337.crt
-ARG SERVER_KEY_FILENAME=localhost-1337.key
+ARG SERVER_CERT_FILENAME=cert.crt
+ARG SERVER_KEY_FILENAME=privkey.pem
 ARG LDAP_SERVER_NAME=localhost
 RUN echo "ServerName ${LDAP_SERVER_NAME}" >> /etc/apache2/apache2.conf && \
     echo "<VirtualHost *:80>\n \
@@ -56,7 +56,7 @@ COPY entrypoint /usr/local/bin/entrypoint
 RUN chmod a+x /usr/local/bin/entrypoint
 
 # Set up /etc/ldap/ldap.conf during build to avoid runtime changes
-ARG LDAP_TLS_CACERT=ca-1337.crt
+ARG LDAP_TLS_CACERT=ca.crt
 RUN mkdir -p /etc/ldap && \
     echo "TLS_CACERT /opt/ssl/${LDAP_TLS_CACERT}" > /etc/ldap/ldap.conf
 
