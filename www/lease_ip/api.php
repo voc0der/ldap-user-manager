@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 @session_start();
-set_include_path( __DIR__ . "/../includes/");
+set_include_path(__DIR__ . "/../includes/");
 include_once "web_functions.inc.php";
 
 header('Content-Type: application/json');
@@ -12,12 +12,35 @@ set_page_access("user");
 // Determine admin (reuse LUM's $IS_ADMIN if available)
 global $IS_ADMIN, $USER_ID;
 $isAdmin = isset($IS_ADMIN) ? (bool)$IS_ADMIN : (isset($_SESSION['is_admin']) && $_SESSION['is_admin'] === true);
-$userId = $USER_ID ?? ($_SESSION['user_id'] ?? 'unknown');
+$userId  = $USER_ID ?? ($_SESSION['user_id'] ?? 'unknown');
 
-// Config
-$apiBase = getenv('LEASE_API_BASE') ?: '/endpoints/ip_lease.php';
-if (!$apiBase) { $apiBase = '/endpoints/lease_poc.php'; }
+// ---- Config / URL normalization ----
+$rawBase = getenv('LEASE_API_BASE') ?: '/endpoints/ip_lease.php';   // can be full URL or path
+$explicitOrigin = getenv('LEASE_API_ORIGIN') ?: '';                 // optional, e.g. https://your-fqdn
 
+function normalize_api_base(string $base, string $explicitOrigin): string {
+    // If already absolute (http/https), use as-is
+    if (preg_match('#^https?://#i', $base)) {
+        return rtrim($base, "&?");
+    }
+    // Build an origin
+    if ($explicitOrigin !== '') {
+        $origin = rtrim($explicitOrigin, '/');
+    } else {
+        // Derive from current request (behind proxy prefers X-Forwarded-Proto)
+        $scheme =
+            $_SERVER['HTTP_X_FORWARDED_PROTO']
+            ?? $_SERVER['REQUEST_SCHEME']
+            ?? ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
+        $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+        $origin = $scheme . '://' . $host;
+    }
+    // Ensure single slash joining
+    return $origin . (str_starts_with($base, '/') ? $base : '/' . $base);
+}
+$apiBase = normalize_api_base($rawBase, $explicitOrigin);
+
+// ---- Helpers ----
 function canon_ip(?string $ip): ?string {
     if (!$ip) return null;
     $ip = trim($ip);
@@ -41,7 +64,7 @@ function get_client_ip(): ?string {
 }
 $clientIp = get_client_ip();
 
-// Read inputs
+// ---- Inputs ----
 $action = $_GET['action'] ?? $_POST['action'] ?? null;
 $ip     = $_GET['ip'] ?? $_POST['ip'] ?? null;
 $hours  = $_GET['hours'] ?? $_POST['hours'] ?? null;
@@ -52,9 +75,8 @@ if (!$action) {
     exit;
 }
 
-// Enforce permissions:
-// - Non-admin users can only add/delete their own detected IP; cannot clear/prune/list all?
-//   We allow list for UX but backend enforcement must be at SWAG endpoint; here we still restrict destructive ops.
+// ---- Permissions ----
+// Non-admin can only add/delete their own IP; cannot clear/prune
 if (!$isAdmin) {
     if (in_array($action, ['clear','prune'], true)) {
         http_response_code(403);
@@ -63,19 +85,17 @@ if (!$isAdmin) {
     }
     if (in_array($action, ['add','delete'], true)) {
         if (!$clientIp) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Cannot detect client IP']); exit; }
-        $ip = $clientIp; // ignore any supplied IP for non-admin
+        $ip = $clientIp; // ignore supplied IP for non-admin
     }
 } else {
-    // Admin default: if add/delete with no IP provided, default to client IP for convenience
     if (in_array($action, ['add','delete'], true) && !$ip) { $ip = $clientIp; }
 }
 
-// Build target URL to SWAG endpoint
-// We will use GET with query params to keep parity
+// ---- Build upstream query ----
 $query = [];
-if ($action === 'list')   { $query['list'] = '1'; }
-elseif ($action === 'clear') { $query['clear'] = '1'; }
-elseif ($action === 'prune') { 
+if ($action === 'list')            { $query['list']  = '1'; }
+elseif ($action === 'clear')       { $query['clear'] = '1'; }
+elseif ($action === 'prune') {
     $n = is_numeric($hours) ? (int)$hours : 0;
     if ($n <= 0) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid hours']); exit; }
     $query['prune'] = (string)$n;
@@ -89,16 +109,17 @@ elseif ($action === 'delete') {
     $ip_c = canon_ip($ip);
     if (!$ip_c) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP for delete']); exit; }
     $query['delete'] = $ip_c;
-} else {
+}
+else {
     http_response_code(400);
     echo json_encode(['ok'=>false, 'error'=>'Unknown action']);
     exit;
 }
 
-$qs = http_build_query($query);
-$url = $apiBase . (strpos($apiBase,'?')===false ? '?' : '&') . $qs;
+$qs  = http_build_query($query);
+$url = $apiBase . (str_contains($apiBase, '?') ? '&' : '?') . $qs;
 
-// Server-side HTTP call using cURL
+// ---- Upstream call ----
 $ch = curl_init();
 curl_setopt_array($ch, [
     CURLOPT_URL => $url,
@@ -108,11 +129,10 @@ curl_setopt_array($ch, [
     CURLOPT_TIMEOUT => 8,
     CURLOPT_USERAGENT => 'LUM-Lease-UI/1.0',
     CURLOPT_HTTPHEADER => [
-        // Provide a label header so the SWAG script can stamp something meaningful
-        'X-IP-Lease-Label: LUM ' . $userId
+        'Accept: application/json',
+        'X-IP-Lease-Label: LUM ' . $userId,   // label for your SWAG script
     ],
-    // If apiBase is HTTPS with self-signed cert internally, you might need to disable verification,
-    // but better solution is to trust the SWAG cert. Uncomment the next two lines only if needed.
+    // If your internal TLS is self-signed, either trust the CA in the image or (last resort) disable verification:
     // CURLOPT_SSL_VERIFYPEER => false,
     // CURLOPT_SSL_VERIFYHOST => 0,
 ]);
@@ -126,13 +146,12 @@ if ($resp === false) {
     echo json_encode(['ok'=>false, 'error'=>'Upstream call failed: '.$err]);
     exit;
 }
-// Try to pass through JSON, else wrap it
+
 $data = json_decode($resp, true);
 if ($data === null) {
-    // Non-JSON upstream (unexpected)
     echo json_encode(['ok'=>false, 'error'=>'Invalid JSON from lease endpoint', 'status'=>$code, 'body'=>$resp]);
     exit;
 }
-http_response_code($code >= 200 && $code < 300 ? 200 : $code);
+http_response_code(($code >= 200 && $code < 300) ? 200 : $code);
 header('Cache-Control: no-store');
 echo json_encode($data);
