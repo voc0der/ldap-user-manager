@@ -1,14 +1,14 @@
 (function() {
-  const apiBase = window.LEASE_IP.apiBase || '/endpoints/ip_lease.php';
   const clientIp = window.LEASE_IP.clientIp || null;
   const isAdmin = !!window.LEASE_IP.isAdmin;
+  const API = '/lease_ip/api.php';
 
   const qs = (o) => Object.entries(o).map(([k,v]) => v === undefined || v === null ? '' : encodeURIComponent(k)+'='+encodeURIComponent(String(v))).filter(Boolean).join('&');
   const call = async (params) => {
-    const url = apiBase + (apiBase.includes('?') ? '&' : '?') + qs(params);
+    const url = API + '?' + qs(params);
     const res = await fetch(url, { credentials: 'include' });
     let data;
-    try { data = await res.json(); } catch { data = { ok:false, error:'Invalid JSON from endpoint' }; }
+    try { data = await res.json(); } catch { data = { ok:false, error:'Invalid JSON from API' }; }
     if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP '+res.status));
     return data;
   };
@@ -24,7 +24,7 @@
     if (!clientIp) return userStatus.textContent = 'Cannot detect client IP.';
     setBusy(btnAdd, true);
     try {
-      const r = await call({ add: clientIp });
+      const r = await call({ action: 'add' });
       userStatus.textContent = (r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`;
     } catch (e) {
       userStatus.textContent = 'Add failed: ' + e.message;
@@ -35,7 +35,7 @@
     if (!clientIp) return userStatus.textContent = 'Cannot detect client IP.';
     setBusy(btnDel, true);
     try {
-      const r = await call({ delete: clientIp });
+      const r = await call({ action: 'delete' });
       userStatus.textContent = (r.result === 'not_found') ? `Not present: ${r.ip}` : `Deleted: ${r.ip}`;
     } catch (e) {
       userStatus.textContent = 'Delete failed: ' + e.message;
@@ -62,7 +62,7 @@
         const tdAct = document.createElement('td'); tdAct.className = 'right';
         const delBtn = document.createElement('button'); delBtn.textContent = 'Delete'; delBtn.addEventListener('click', async () => {
           delBtn.disabled = true;
-          try { await call({ delete: ent.ip }); await refresh(); adminStatus.textContent = `Deleted ${ent.ip}`; }
+          try { await call({ action: 'delete', ip: ent.ip }); await refresh(); adminStatus.textContent = `Deleted ${ent.ip}`; }
           catch (e) { adminStatus.textContent = 'Delete failed: ' + e.message; }
           finally { delBtn.disabled = false; }
         });
@@ -76,7 +76,7 @@
     const refresh = async () => {
       adminStatus.textContent = 'Loading...';
       try {
-        const r = await call({ list: 1 });
+        const r = await call({ action: 'list' });
         adminStatus.textContent = '';
         renderRows(r.entries || []);
       } catch (e) {
@@ -89,7 +89,7 @@
     btnClear?.addEventListener('click', async () => {
       if (!confirm('Clear ALL entries?')) return;
       btnClear.disabled = true;
-      try { await call({ clear: 1 }); await refresh(); adminStatus.textContent = 'Cleared all'; }
+      try { await call({ action: 'clear' }); await refresh(); adminStatus.textContent = 'Cleared all'; }
       catch (e) { adminStatus.textContent = 'Clear failed: ' + e.message; }
       finally { btnClear.disabled = false; }
     });
@@ -97,7 +97,7 @@
       const n = parseInt(pruneHours.value, 10);
       if (!(n > 0)) return adminStatus.textContent = 'Enter a positive hour count.';
       btnPrune.disabled = true;
-      try { await call({ prune: n }); await refresh(); adminStatus.textContent = `Pruned entries older than ${n} hours`; }
+      try { await call({ action: 'prune', hours: n }); await refresh(); adminStatus.textContent = `Pruned entries older than ${n} hours`; }
       catch (e) { adminStatus.textContent = 'Prune failed: ' + e.message; }
       finally { btnPrune.disabled = false; }
     });
