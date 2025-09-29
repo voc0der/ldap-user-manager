@@ -1,34 +1,27 @@
 name: Build Docker Image
-
 on:
   push:
-    branches:
-      - master
+    branches: [ master ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-    # Step 1: Check out the repository
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    # Step 2: Log in to Docker Hub (optional if you're pushing to a registry)
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+      - uses: docker/setup-buildx-action@v3
 
-    # Step 3: Build the Docker image
-    - name: Build Docker image
-      run: |
-        # Build with both commit SHA and 'latest' tag
-        docker build -t voc0der/ldap-user-manager:${{ github.sha }} -t voc0der/ldap-user-manager:latest .
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-    # Step 4: Optionally push the image to Docker Hub
-    - name: Push Docker images to Docker Hub
-      run: |
-        docker push voc0der/ldap-user-manager:${{ github.sha }}
-        docker push voc0der/ldap-user-manager:latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            voc0der/ldap-user-manager:latest
+            voc0der/ldap-user-manager:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
