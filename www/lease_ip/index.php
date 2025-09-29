@@ -26,63 +26,68 @@ $clientIp = get_client_ip();
 render_header('Lease IP');
 ?>
 
-<!-- User section -->
-<table class="table table-striped">
-  <thead>
-    <tr><th colspan="2">Lease IP</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Detected client IP</td>
-      <td><code id="detected-ip"><?php echo htmlspecialchars($clientIp ?? 'unknown'); ?></code></td>
-    </tr>
-    <tr>
-      <td>Actions</td>
-      <td>
-        <button id="btn-add" class="button">Add my IP</button>
-        <button id="btn-del" class="button">Remove my IP</button>
-      </td>
-    </tr>
-    <tr>
-      <td>Status</td>
-      <td><span id="user-status" class="smallprint"></span></td>
-    </tr>
-  </tbody>
-</table>
+<div class="container">
 
-<?php if ($isAdmin): ?>
-<!-- Admin section -->
-<table class="table table-striped">
-  <thead>
-    <tr>
-      <th colspan="4">
-        Active Leases
-        <span class="smallprint"> &nbsp; Total: <span id="count">–</span></span>
-        &nbsp; <button id="btn-refresh" class="button">Refresh list</button>
-      </th>
-    </tr>
-    <tr>
-      <th>Label</th>
-      <th>Timestamp</th>
-      <th>IP</th>
-      <th style="text-align:right;">Actions</th>
-    </tr>
-  </thead>
-  <tbody id="tbody"></tbody>
-  <tfoot>
-    <tr>
-      <td colspan="4">
-        <button id="btn-clear" class="button danger">Clear all</button>
-        &nbsp; <label>Prune (hours):
-          <input id="prune-hours" type="number" min="1" value="24" style="width:6em;">
-        </label>
-        <button id="btn-prune" class="button">Run prune</button>
-        <span id="admin-status" class="smallprint" style="margin-left:.5rem;"></span>
-      </td>
-    </tr>
-  </tfoot>
-</table>
-<?php endif; ?>
+  <!-- User section -->
+  <table class="table table-striped">
+    <thead>
+      <tr><th colspan="2">Lease IP</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Detected client IP</td>
+        <td><code id="detected-ip"><?php echo htmlspecialchars($clientIp ?? 'unknown'); ?></code></td>
+      </tr>
+      <tr>
+        <td>Actions</td>
+        <td>
+          <button id="btn-add" class="btn btn-default">Add my IP</button>
+          <button id="btn-del" class="btn btn-default">Remove my IP</button>
+        </td>
+      </tr>
+      <tr>
+        <td>Status</td>
+        <td><span id="user-status" class="smallprint"></span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <?php if ($isAdmin): ?>
+  <!-- Admin section -->
+  <table class="table table-striped">
+    <thead>
+      <tr>
+        <th colspan="4">
+          Active Leases
+          <span class="smallprint"> &nbsp; Total: <span id="count">–</span></span>
+          &nbsp; <button id="btn-refresh" class="btn btn-default">Refresh list</button>
+        </th>
+      </tr>
+      <tr>
+        <th>Label</th>
+        <th>Timestamp</th>
+        <th>IP</th>
+        <th class="text-right">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+    <tfoot>
+      <tr>
+        <td colspan="4">
+          <button id="btn-clear" class="btn btn-default">Clear all</button>
+          &nbsp;
+          <label>Prune (hours):
+            <input id="prune-hours" type="number" min="1" value="24" style="width:6em;">
+          </label>
+          <button id="btn-prune" class="btn btn-default">Run prune</button>
+          <span id="admin-status" class="smallprint" style="margin-left:.5rem;"></span>
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+  <?php endif; ?>
+
+</div>
 
 <script>
   window.LEASE_IP = {
