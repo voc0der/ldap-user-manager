@@ -26,42 +26,62 @@ $clientIp = get_client_ip();
 render_header('Lease IP');
 ?>
 
-<div class="box">
-  <h2>Lease IP</h2>
-  <p>Detected client IP: <code id="detected-ip"><?php echo htmlspecialchars($clientIp ?? 'unknown'); ?></code></p>
-  <p>
-    <button id="btn-add" class="button">Add my IP</button>
-    <button id="btn-del" class="button">Remove my IP</button>
-  </p>
-  <div id="user-status" class="smallprint"></div>
-</div>
+<!-- User section -->
+<table class="table table-striped">
+  <thead>
+    <tr><th colspan="2">Lease IP</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Detected client IP</td>
+      <td><code id="detected-ip"><?php echo htmlspecialchars($clientIp ?? 'unknown'); ?></code></td>
+    </tr>
+    <tr>
+      <td>Actions</td>
+      <td>
+        <button id="btn-add" class="button">Add my IP</button>
+        <button id="btn-del" class="button">Remove my IP</button>
+      </td>
+    </tr>
+    <tr>
+      <td>Status</td>
+      <td><span id="user-status" class="smallprint"></span></td>
+    </tr>
+  </tbody>
+</table>
 
 <?php if ($isAdmin): ?>
-<div class="box">
-  <h3>Active Leases</h3>
-  <p>
-    <button id="btn-refresh" class="button">Refresh list</button>
-    <span class="smallprint">Total: <span id="count">–</span></span>
-  </p>
-
-  <div class="tablecontainer">
-    <table class="results">
-      <thead>
-        <tr><th>Label</th><th>Timestamp</th><th>IP</th><th style="text-align:right;">Actions</th></tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
-  </div>
-
-  <p>
-    <button id="btn-clear" class="button danger">Clear all</button>
-    <label> Prune (hours):
-      <input id="prune-hours" type="number" min="1" value="24" style="width:6em;">
-    </label>
-    <button id="btn-prune" class="button">Run prune</button>
-  </p>
-  <div id="admin-status" class="smallprint"></div>
-</div>
+<!-- Admin section -->
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th colspan="4">
+        Active Leases
+        <span class="smallprint"> &nbsp; Total: <span id="count">–</span></span>
+        &nbsp; <button id="btn-refresh" class="button">Refresh list</button>
+      </th>
+    </tr>
+    <tr>
+      <th>Label</th>
+      <th>Timestamp</th>
+      <th>IP</th>
+      <th style="text-align:right;">Actions</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+  <tfoot>
+    <tr>
+      <td colspan="4">
+        <button id="btn-clear" class="button danger">Clear all</button>
+        &nbsp; <label>Prune (hours):
+          <input id="prune-hours" type="number" min="1" value="24" style="width:6em;">
+        </label>
+        <button id="btn-prune" class="button">Run prune</button>
+        <span id="admin-status" class="smallprint" style="margin-left:.5rem;"></span>
+      </td>
+    </tr>
+  </tfoot>
+</table>
 <?php endif; ?>
 
 <script>
