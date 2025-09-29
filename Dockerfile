@@ -1,21 +1,26 @@
 FROM php:8-apache
 
 # Install required packages as root
-RUN apt-get update && \
+RUN set -eux; \
+    apt-get update; \
     apt-get install -y --no-install-recommends \
         libldb-dev libldap2-dev libldap-common \
         libfreetype6-dev \
-        libjpeg-dev \
+        libjpeg62-turbo-dev \
         libpng-dev \
+        dpkg-dev \
         gosu && \
     rm -rf /var/lib/apt/lists/*
 
 # Configure and install PHP extensions
-RUN docker-php-ext-configure gd --with-freetype && \
-    docker-php-ext-install -j$(nproc) gd && \
-    libdir=$(find /usr -name "libldap.so*" | sed -e 's#/usr/##' -e 's#/libldap.so##') && \
-    docker-php-ext-configure ldap --with-libdir=$libdir && \
-    docker-php-ext-install -j$(nproc) ldap
+# - gd: enable freetype + jpeg explicitly
+# - ldap: use correct multiarch libdir (fixes "invalid host type: lib/x86_64-linux-gnu.2")
+RUN set -eux; \
+    docker-php-ext-configure gd --with-freetype --with-jpeg; \
+    docker-php-ext-install -j"$(nproc)" gd; \
+    multiarch="$(dpkg-architecture -q DEB_BUILD_MULTIARCH)"; \
+    docker-php-ext-configure ldap --with-libdir="lib/${multiarch}"; \
+    docker-php-ext-install -j"$(nproc)" ldap
 
 # Add PHPMailer archive and extract
 ADD https://github.com/PHPMailer/PHPMailer/archive/refs/tags/v6.3.0.tar.gz /tmp
