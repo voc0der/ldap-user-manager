@@ -12,6 +12,7 @@
                     'log_in'          => 'hidden_on_login',
                     'change_password' => 'auth',
                     'account_manager' => 'admin',
+                    'lease_ip'        => 'auth',
                   );
 
 if ($ACCOUNT_REQUESTS_ENABLED == TRUE) {
