@@ -72,7 +72,7 @@ function apprise_notify(string $title, string $htmlBody): void {
         CURLOPT_URL => $url,
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => [
-            'body' => "🔐 <b>{$title}</b><br />{$htmlBody}",
+            'body' => "🔐 `{$title}`<br />{$htmlBody}",
             'tag'  => $tag,
         ],
         CURLOPT_RETURNTRANSFER => true,
