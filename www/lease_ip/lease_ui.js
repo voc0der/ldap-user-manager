@@ -3,7 +3,10 @@
   const isAdmin = !!window.LEASE_IP.isAdmin;
   const API = '/lease_ip/api.php';
 
-  const qs = (o) => Object.entries(o).map(([k,v]) => v === undefined || v === null ? '' : encodeURIComponent(k)+'='+encodeURIComponent(String(v))).filter(Boolean).join('&');
+  const qs = (o) => Object.entries(o)
+    .map(([k,v]) => v === undefined || v === null ? '' : encodeURIComponent(k)+'='+encodeURIComponent(String(v)))
+    .filter(Boolean).join('&');
+
   const call = async (params) => {
     const url = API + '?' + qs(params);
     const res = await fetch(url, { credentials: 'include' });
@@ -51,23 +54,46 @@
     const btnPrune = document.getElementById('btn-prune');
     const pruneHours = document.getElementById('prune-hours');
     const adminStatus = document.getElementById('admin-status');
+    const manualIp = document.getElementById('manual-ip');
+    const btnAddManual = document.getElementById('btn-add-manual');
 
     const renderRows = (entries) => {
       tbody.innerHTML = '';
       for (const ent of entries) {
         const tr = document.createElement('tr');
-        const tdLabel = document.createElement('td'); tdLabel.textContent = ent.host || ent.label || 'unknown';
-        const tdTs = document.createElement('td'); tdTs.textContent = ent.timestamp || '';
-        const tdIp = document.createElement('td'); tdIp.textContent = ent.ip || '';
-        const tdAct = document.createElement('td'); tdAct.className = 'right';
-        const delBtn = document.createElement('button'); delBtn.textContent = 'Delete'; delBtn.addEventListener('click', async () => {
+
+        const tdLabel = document.createElement('td');
+        tdLabel.textContent = ent.host || ent.label || 'unknown';
+
+        const tdTs = document.createElement('td');
+        tdTs.textContent = ent.timestamp || '';
+
+        const tdIp = document.createElement('td');
+        tdIp.textContent = ent.ip || '';
+
+        const tdAct = document.createElement('td');
+        tdAct.className = 'text-right';
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.className = 'btn btn-default btn-sm';
+        delBtn.addEventListener('click', async () => {
           delBtn.disabled = true;
-          try { await call({ action: 'delete', ip: ent.ip }); await refresh(); adminStatus.textContent = `Deleted ${ent.ip}`; }
-          catch (e) { adminStatus.textContent = 'Delete failed: ' + e.message; }
-          finally { delBtn.disabled = false; }
+          try {
+            await call({ action: 'delete', ip: ent.ip });
+            await refresh();
+            adminStatus.textContent = `Deleted ${ent.ip}`;
+          } catch (e) {
+            adminStatus.textContent = 'Delete failed: ' + e.message;
+          } finally {
+            delBtn.disabled = false;
+          }
         });
         tdAct.appendChild(delBtn);
-        tr.appendChild(tdLabel); tr.appendChild(tdTs); tr.appendChild(tdIp); tr.appendChild(tdAct);
+
+        tr.appendChild(tdLabel);
+        tr.appendChild(tdTs);
+        tr.appendChild(tdIp);
+        tr.appendChild(tdAct);
         tbody.appendChild(tr);
       }
       count.textContent = String(entries.length);
@@ -85,21 +111,56 @@
         count.textContent = '0';
       }
     };
+
     btnRefresh?.addEventListener('click', refresh);
+
     btnClear?.addEventListener('click', async () => {
       if (!confirm('Clear ALL entries?')) return;
       btnClear.disabled = true;
-      try { await call({ action: 'clear' }); await refresh(); adminStatus.textContent = 'Cleared all'; }
-      catch (e) { adminStatus.textContent = 'Clear failed: ' + e.message; }
-      finally { btnClear.disabled = false; }
+      try {
+        await call({ action: 'clear' });
+        await refresh();
+        adminStatus.textContent = 'Cleared all';
+      } catch (e) {
+        adminStatus.textContent = 'Clear failed: ' + e.message;
+      } finally {
+        btnClear.disabled = false;
+      }
     });
+
     btnPrune?.addEventListener('click', async () => {
       const n = parseInt(pruneHours.value, 10);
       if (!(n > 0)) return adminStatus.textContent = 'Enter a positive hour count.';
       btnPrune.disabled = true;
-      try { await call({ action: 'prune', hours: n }); await refresh(); adminStatus.textContent = `Pruned entries older than ${n} hours`; }
-      catch (e) { adminStatus.textContent = 'Prune failed: ' + e.message; }
-      finally { btnPrune.disabled = false; }
+      try {
+        await call({ action: 'prune', hours: n });
+        await refresh();
+        adminStatus.textContent = `Pruned entries older than ${n} hours`;
+      } catch (e) {
+        adminStatus.textContent = 'Prune failed: ' + e.message;
+      } finally {
+        btnPrune.disabled = false;
+      }
+    });
+
+    // New: manual add for admins
+    btnAddManual?.addEventListener('click', async () => {
+      const ip = (manualIp?.value || '').trim();
+      if (!ip) {
+        adminStatus.textContent = 'Enter an IP address.';
+        return;
+      }
+      btnAddManual.disabled = true;
+      try {
+        const r = await call({ action: 'add', ip });
+        await refresh();
+        adminStatus.textContent = (r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`;
+        manualIp.value = '';
+      } catch (e) {
+        adminStatus.textContent = 'Add failed: ' + e.message;
+      } finally {
+        btnAddManual.disabled = false;
+      }
     });
 
     // initial load
