@@ -19,15 +19,12 @@ $rawBase = getenv('LEASE_API_BASE') ?: '/endpoints/ip_lease.php';   // can be fu
 $explicitOrigin = getenv('LEASE_API_ORIGIN') ?: '';                 // optional, e.g. https://your-fqdn
 
 function normalize_api_base(string $base, string $explicitOrigin): string {
-    // If already absolute (http/https), use as-is
     if (preg_match('#^https?://#i', $base)) {
         return rtrim($base, "&?");
     }
-    // Build an origin
     if ($explicitOrigin !== '') {
         $origin = rtrim($explicitOrigin, '/');
     } else {
-        // Derive from current request (behind proxy prefers X-Forwarded-Proto)
         $scheme =
             $_SERVER['HTTP_X_FORWARDED_PROTO']
             ?? $_SERVER['REQUEST_SCHEME']
@@ -35,7 +32,6 @@ function normalize_api_base(string $base, string $explicitOrigin): string {
         $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
         $origin = $scheme . '://' . $host;
     }
-    // Ensure single slash joining
     return $origin . (str_starts_with($base, '/') ? $base : '/' . $base);
 }
 $apiBase = normalize_api_base($rawBase, $explicitOrigin);
@@ -63,6 +59,30 @@ function get_client_ip(): ?string {
     return null;
 }
 $clientIp = get_client_ip();
+
+// ---- Matrix/Apprise notify helper ----
+function apprise_notify(string $title, string $htmlBody): void {
+    // Build notify URL: APPRISE_URL wins; else https://notify.$EMAIL_DOMAIN/notify/apprise
+    $domain = getenv('EMAIL_DOMAIN') ?: getenv('DOMAIN_NAME') ?: ($_SERVER['SERVER_NAME'] ?? 'localhost');
+    $url = getenv('APPRISE_URL') ?: ('https://notify.' . $domain . '/notify/apprise');
+    $tag = getenv('APPRISE_TAG') ?: 'matrix_group_system_alerts';
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => [
+            'body' => "🔐 <b>{$title}</b><br />{$htmlBody}",
+            'tag'  => $tag,
+        ],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT => 3,
+        CURLOPT_USERAGENT => 'LUM-Lease-UI/1.0',
+    ]);
+    @curl_exec($ch); // fire-and-forget
+    curl_close($ch);
+}
 
 // ---- Inputs ----
 $action = $_GET['action'] ?? $_POST['action'] ?? null;
@@ -152,6 +172,36 @@ if ($data === null) {
     echo json_encode(['ok'=>false, 'error'=>'Invalid JSON from lease endpoint', 'status'=>$code, 'body'=>$resp]);
     exit;
 }
+
+// ---- Send Matrix notifications for successful mutations ----
+if ($code >= 200 && $code < 300 && is_array($data) && ($data['ok'] ?? null) !== false) {
+    $who  = htmlspecialchars((string)$userId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $ipH  = htmlspecialchars((string)($data['ip'] ?? $ip ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $host = htmlspecialchars((string)($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $ts   = date('Y-m-d H:i:s T');
+
+    switch ($action) {
+        case 'add':
+            if (($data['result'] ?? '') === 'added') {
+                apprise_notify('Lease IP Added', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+            }
+            break;
+        case 'delete':
+            if (($data['result'] ?? '') === 'deleted') {
+                apprise_notify('Lease IP Removed', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+            }
+            break;
+        case 'clear':
+            apprise_notify('Lease List Cleared', "by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+            break;
+        case 'prune':
+            $hrs = (int)($hours ?? 0);
+            apprise_notify('Lease List Pruned', "older than <code>{$hrs}h</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+            break;
+        // list: no notify
+    }
+}
+
 http_response_code(($code >= 200 && $code < 300) ? 200 : $code);
 header('Cache-Control: no-store');
 echo json_encode($data);
