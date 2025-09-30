@@ -50,8 +50,8 @@ function get_client_ip(): ?string {
     if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
         foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $p) { $candidates[] = trim($p); }
     }
-    if (!empty($_SERVER['HTTP_X_REAL_IP'])) $candidates[] = trim($p);
-    if (!empty($_SERVER['REMOTE_ADDR']))    $candidates[] = trim($_SERVER['REMOTE_ADDR']);
+    if (!empty($_SERVER['HTTP_X_REAL_IP'])) $candidates[] = trim($_SERVER['HTTP_X_REAL_IP']);
+    if (!empty($_SERVER['REMOTE_ADDR']))   $candidates[] = trim($_SERVER['REMOTE_ADDR']);
     foreach ($candidates as $c) {
         $canon = canon_ip($c);
         if ($canon) return $canon;
@@ -83,69 +83,85 @@ function apprise_notify(string $title, string $htmlBody): void {
     curl_close($ch);
 }
 
-// ---- Inputs ----
-$action = $_GET['action'] ?? $_POST['action'] ?? null;
-$ip     = $_GET['ip'] ?? $_POST['ip'] ?? null;
-$hours  = $_GET['hours'] ?? $_POST['hours'] ?? null;
-
-if (!$action) {
+// ---- Single-parameter input enforcement ----
+$allowed = ['list','clear','prune','add','delete','static','unstatic'];
+$getKeys = array_keys($_GET ?? []);
+if (count($getKeys) !== 1) {
     http_response_code(400);
-    echo json_encode(['ok'=>false, 'error'=>'Missing action']);
+    echo json_encode(['ok'=>false, 'error'=>'Exactly one GET parameter required', 'received'=>$getKeys]);
+    exit;
+}
+$key = $getKeys[0];
+$val = (string)($_GET[$key] ?? '');
+
+if (!in_array($key, $allowed, true)) {
+    http_response_code(400);
+    echo json_encode(['ok'=>false, 'error'=>'Unknown operation', 'allowed'=>$allowed, 'received'=>$key]);
     exit;
 }
 
-// ---- Permissions ----
-// Non-admin can only add/delete their own IP; cannot clear/prune/static/unstatic
-if (!$isAdmin) {
-    if (in_array($action, ['clear','prune','static','unstatic'], true)) {
-        http_response_code(403);
-        echo json_encode(['ok'=>false, 'error'=>'Admin required']);
-        exit;
-    }
-    if (in_array($action, ['add','delete'], true)) {
-        if (!$clientIp) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Cannot detect client IP']); exit; }
-        $ip = $clientIp; // ignore supplied IP for non-admin
-    }
-} else {
-    if (in_array($action, ['add','delete','static','unstatic'], true) && !$ip) { $ip = $clientIp; }
+// ---- Permissions & effective IP/hours ----
+$effectiveIp = null;
+$hours = null;
+
+switch ($key) {
+    case 'list':
+    case 'clear':
+        if (!$isAdmin && $key === 'clear') {
+            http_response_code(403);
+            echo json_encode(['ok'=>false,'error'=>'Admin required']);
+            exit;
+        }
+        break;
+
+    case 'prune':
+        if (!$isAdmin) {
+            http_response_code(403);
+            echo json_encode(['ok'=>false,'error'=>'Admin required']);
+            exit;
+        }
+        $hours = is_numeric($val) ? (int)$val : 0;
+        if ($hours <= 0) {
+            http_response_code(400);
+            echo json_encode(['ok'=>false,'error'=>'Invalid hours']);
+            exit;
+        }
+        break;
+
+    case 'add':
+    case 'delete':
+        if ($isAdmin) {
+            $effectiveIp = canon_ip($val) ?: $clientIp;
+            if (!$effectiveIp) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP']); exit; }
+        } else {
+            if (!$clientIp) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Cannot detect client IP']); exit; }
+            $effectiveIp = $clientIp; // ignore supplied
+        }
+        break;
+
+    case 'static':
+    case 'unstatic':
+        if (!$isAdmin) {
+            http_response_code(403);
+            echo json_encode(['ok'=>false,'error'=>'Admin required']);
+            exit;
+        }
+        $effectiveIp = canon_ip($val) ?: $clientIp;
+        if (!$effectiveIp) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP']); exit; }
+        break;
 }
 
-// ---- Build upstream query ----
-$query = [];
-if ($action === 'list')            { $query['list']  = '1'; }
-elseif ($action === 'clear')       { $query['clear'] = '1'; }
-elseif ($action === 'prune') {
-    $n = is_numeric($hours) ? (int)$hours : 0;
-    if ($n <= 0) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid hours']); exit; }
-    $query['prune'] = (string)$n;
-}
-elseif ($action === 'add') {
-    $ip_c = canon_ip($ip);
-    if (!$ip_c) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP for add']); exit; }
-    $query['add'] = $ip_c;
-}
-elseif ($action === 'delete') {
-    $ip_c = canon_ip($ip);
-    if (!$ip_c) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP for delete']); exit; }
-    $query['delete'] = $ip_c;
-}
-elseif ($action === 'static') {
-    $ip_c = canon_ip($ip);
-    if (!$ip_c) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP for static']); exit; }
-    $query['static'] = $ip_c;
-}
-elseif ($action === 'unstatic') {
-    $ip_c = canon_ip($ip);
-    if (!$ip_c) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP for unstatic']); exit; }
-    $query['unstatic'] = $ip_c;
-}
-else {
-    http_response_code(400);
-    echo json_encode(['ok'=>false, 'error'=>'Unknown action']);
-    exit;
-}
+// ---- Build upstream URL with exactly one parameter ----
+$one = [];
+if ($key === 'list')        $one = ['list' => '1'];
+elseif ($key === 'clear')   $one = ['clear' => '1'];
+elseif ($key === 'prune')   $one = ['prune' => (string)$hours];
+elseif ($key === 'add')     $one = ['add' => $effectiveIp];
+elseif ($key === 'delete')  $one = ['delete' => $effectiveIp];
+elseif ($key === 'static')  $one = ['static' => $effectiveIp];
+elseif ($key === 'unstatic')$one = ['unstatic' => $effectiveIp];
 
-$qs  = http_build_query($query);
+$qs  = http_build_query($one, '', '&', PHP_QUERY_RFC3986);
 $url = $apiBase . (str_contains($apiBase, '?') ? '&' : '?') . $qs;
 
 // ---- Upstream call ----
@@ -159,7 +175,7 @@ curl_setopt_array($ch, [
     CURLOPT_USERAGENT => 'LUM-Lease-UI/1.0',
     CURLOPT_HTTPHEADER => [
         'Accept: application/json',
-        'X-IP-Lease-Label: LUM ' . $userId,   // label for your SWAG script
+        'X-IP-Lease-Label: LUM ' . $userId,
     ],
 ]);
 $resp = curl_exec($ch);
@@ -179,14 +195,14 @@ if ($data === null) {
     exit;
 }
 
-// ---- Send Matrix notifications for successful mutations ----
+// ---- Matrix notifications on success ----
 if ($code >= 200 && $code < 300 && is_array($data) && ($data['ok'] ?? null) !== false) {
     $who  = htmlspecialchars((string)$userId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    $ipH  = htmlspecialchars((string)($data['ip'] ?? $ip ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $ipH  = htmlspecialchars((string)($data['ip'] ?? $effectiveIp ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $host = htmlspecialchars((string)($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $ts   = date('Y-m-d H:i:s T');
 
-    switch ($action) {
+    switch ($key) {
         case 'add':
             if (($data['result'] ?? '') === 'added') {
                 apprise_notify('Lease IP Added', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
@@ -201,8 +217,7 @@ if ($code >= 200 && $code < 300 && is_array($data) && ($data['ok'] ?? null) !== 
             apprise_notify('Lease List Cleared', "by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
             break;
         case 'prune':
-            $hrs = (int)($hours ?? 0);
-            apprise_notify('Lease List Pruned', "older than <code>{$hrs}h</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+            apprise_notify('Lease List Pruned', "by <code>{$who}</code> older than <code>{$hours}h</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
             break;
         case 'static':
             apprise_notify('Lease IP Marked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
