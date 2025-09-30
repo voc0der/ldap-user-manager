@@ -74,6 +74,15 @@ render_header('Lease IP');
     <tfoot>
       <tr>
         <td colspan="4">
+          <!-- Manual add (admin) -->
+          <label style="margin-right:.5rem;">Add IP (admin):</label>
+          <input id="manual-ip" type="text" placeholder="e.g. 203.0.113.7 or 2001:db8::1" style="max-width: 20rem;">
+          <button id="btn-add-manual" class="btn btn-default">Add IP</button>
+          <span class="smallprint" style="margin-left:.5rem;">Backend validates IPv4/IPv6.</span>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="4">
           <button id="btn-clear" class="btn btn-default">Clear all</button>
           &nbsp;
           <label>Prune (hours):
