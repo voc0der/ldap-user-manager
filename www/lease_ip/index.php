@@ -77,8 +77,9 @@ render_header('Lease IP');
           <!-- Manual add (admin) -->
           <label style="margin-right:.5rem;">Add IP (admin):</label>
           <input id="manual-ip" type="text" placeholder="e.g. 203.0.113.7 or 2001:db8::1" style="max-width: 20rem;">
+          &nbsp; <label style="margin:0 .5rem 0 .75rem;"><input id="manual-static" type="checkbox"> Static</label>
           <button id="btn-add-manual" class="btn btn-default">Add IP</button>
-          <span class="smallprint" style="margin-left:.5rem;">Backend validates IPv4/IPv6.</span>
+          <span class="smallprint" style="margin-left:.5rem;">Static entries are skipped by prune.</span>
         </td>
       </tr>
       <tr>
