@@ -31,7 +31,7 @@ render_header('Lease IP');
   <!-- User section -->
   <table class="table table-striped">
     <thead>
-      <tr><th colspan="2">Lease IP</th></tr>
+      <tr><th colspan="2">Lease IP (Internal)</th></tr>
     </thead>
     <tbody>
       <tr>
