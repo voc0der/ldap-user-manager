@@ -19,19 +19,10 @@ $rawBase = getenv('LEASE_API_BASE') ?: '/endpoints/ip_lease.php';   // can be fu
 $explicitOrigin = getenv('LEASE_API_ORIGIN') ?: '';                 // optional, e.g. https://your-fqdn
 
 function normalize_api_base(string $base, string $explicitOrigin): string {
-    if (preg_match('#^https?://#i', $base)) {
-        return rtrim($base, "&?");
-    }
-    if ($explicitOrigin !== '') {
-        $origin = rtrim($explicitOrigin, '/');
-    } else {
-        $scheme =
-            $_SERVER['HTTP_X_FORWARDED_PROTO']
-            ?? $_SERVER['REQUEST_SCHEME']
-            ?? ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
-        $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
-        $origin = $scheme . '://' . $host;
-    }
+    if (preg_match('#^https?://#i', $base)) return rtrim($base, "&?");
+    $origin = $explicitOrigin !== '' ? rtrim($explicitOrigin, '/')
+             : (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? $_SERVER['REQUEST_SCHEME'] ?? ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http')) . '://' .
+                ($_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost')));
     return $origin . (str_starts_with($base, '/') ? $base : '/' . $base);
 }
 $apiBase = normalize_api_base($rawBase, $explicitOrigin);
@@ -42,20 +33,14 @@ function canon_ip(?string $ip): ?string {
     $ip = trim($ip);
     if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_IPV6)) return null;
     $bin = @inet_pton($ip);
-    if ($bin === false) return null;
-    return inet_ntop($bin);
+    return $bin === false ? null : inet_ntop($bin);
 }
 function get_client_ip(): ?string {
-    $candidates = [];
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $p) { $candidates[] = trim($p); }
-    }
-    if (!empty($_SERVER['HTTP_X_REAL_IP'])) $candidates[] = trim($_SERVER['HTTP_X_REAL_IP']);
-    if (!empty($_SERVER['REMOTE_ADDR']))   $candidates[] = trim($_SERVER['REMOTE_ADDR']);
-    foreach ($candidates as $c) {
-        $canon = canon_ip($c);
-        if ($canon) return $canon;
-    }
+    $c = [];
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $p) $c[] = trim($p);
+    if (!empty($_SERVER['HTTP_X_REAL_IP'])) $c[] = trim($_SERVER['HTTP_X_REAL_IP']);
+    if (!empty($_SERVER['REMOTE_ADDR']))    $c[] = trim($_SERVER['REMOTE_ADDR']);
+    foreach ($c as $v) { $canon = canon_ip($v); if ($canon) return $canon; }
     return null;
 }
 $clientIp = get_client_ip();
@@ -84,7 +69,7 @@ function apprise_notify(string $title, string $htmlBody): void {
 }
 
 // ---- Single-parameter input enforcement ----
-$allowed = ['list','clear','prune','add','delete','static','unstatic'];
+$allowed = ['list','clear','add','delete','prune'];
 $getKeys = array_keys($_GET ?? []);
 if (count($getKeys) !== 1) {
     http_response_code(400);
@@ -100,32 +85,26 @@ if (!in_array($key, $allowed, true)) {
     exit;
 }
 
+// Optional static toggle header from browser -> forwarded to SWAG
+$lumStaticHdr = strtolower(trim($_SERVER['HTTP_X_LUM_STATIC'] ?? '')); // '1'|'0'|''
+
 // ---- Permissions & effective IP/hours ----
 $effectiveIp = null;
 $hours = null;
 
 switch ($key) {
     case 'list':
+        // allowed for all
+        break;
+
     case 'clear':
-        if (!$isAdmin && $key === 'clear') {
-            http_response_code(403);
-            echo json_encode(['ok'=>false,'error'=>'Admin required']);
-            exit;
-        }
+        if (!$isAdmin) { http_response_code(403); echo json_encode(['ok'=>false,'error'=>'Admin required']); exit; }
         break;
 
     case 'prune':
-        if (!$isAdmin) {
-            http_response_code(403);
-            echo json_encode(['ok'=>false,'error'=>'Admin required']);
-            exit;
-        }
+        if (!$isAdmin) { http_response_code(403); echo json_encode(['ok'=>false,'error'=>'Admin required']); exit; }
         $hours = is_numeric($val) ? (int)$val : 0;
-        if ($hours <= 0) {
-            http_response_code(400);
-            echo json_encode(['ok'=>false,'error'=>'Invalid hours']);
-            exit;
-        }
+        if ($hours <= 0) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid hours']); exit; }
         break;
 
     case 'add':
@@ -135,36 +114,32 @@ switch ($key) {
             if (!$effectiveIp) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP']); exit; }
         } else {
             if (!$clientIp) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Cannot detect client IP']); exit; }
-            $effectiveIp = $clientIp; // ignore supplied
+            $effectiveIp = $clientIp; // ignore supplied IP for non-admin
         }
-        break;
-
-    case 'static':
-    case 'unstatic':
-        if (!$isAdmin) {
-            http_response_code(403);
-            echo json_encode(['ok'=>false,'error'=>'Admin required']);
-            exit;
-        }
-        $effectiveIp = canon_ip($val) ?: $clientIp;
-        if (!$effectiveIp) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP']); exit; }
         break;
 }
 
 // ---- Build upstream URL with exactly one parameter ----
 $one = [];
-if ($key === 'list')        $one = ['list' => '1'];
-elseif ($key === 'clear')   $one = ['clear' => '1'];
-elseif ($key === 'prune')   $one = ['prune' => (string)$hours];
-elseif ($key === 'add')     $one = ['add' => $effectiveIp];
-elseif ($key === 'delete')  $one = ['delete' => $effectiveIp];
-elseif ($key === 'static')  $one = ['static' => $effectiveIp];
-elseif ($key === 'unstatic')$one = ['unstatic' => $effectiveIp];
+if     ($key === 'list')   $one = ['list' => '1'];
+elseif ($key === 'clear')  $one = ['clear' => '1'];
+elseif ($key === 'prune')  $one = ['prune' => (string)$hours];
+elseif ($key === 'add')    $one = ['add' => $effectiveIp];
+elseif ($key === 'delete') $one = ['delete' => $effectiveIp];
 
 $qs  = http_build_query($one, '', '&', PHP_QUERY_RFC3986);
 $url = $apiBase . (str_contains($apiBase, '?') ? '&' : '?') . $qs;
 
 // ---- Upstream call ----
+$headers = [
+    'Accept: application/json',
+    'X-IP-Lease-Label: LUM ' . $userId,
+];
+// forward static intent ONLY on add (still one GET var)
+if ($key === 'add' && $lumStaticHdr !== '') {
+    $headers[] = 'X-IP-Lease-Static: ' . (($lumStaticHdr === '1' || $lumStaticHdr === 'yes' || $lumStaticHdr === 'true') ? 'yes' : 'no');
+}
+
 $ch = curl_init();
 curl_setopt_array($ch, [
     CURLOPT_URL => $url,
@@ -173,10 +148,7 @@ curl_setopt_array($ch, [
     CURLOPT_CONNECTTIMEOUT => 3,
     CURLOPT_TIMEOUT => 8,
     CURLOPT_USERAGENT => 'LUM-Lease-UI/1.0',
-    CURLOPT_HTTPHEADER => [
-        'Accept: application/json',
-        'X-IP-Lease-Label: LUM ' . $userId,
-    ],
+    CURLOPT_HTTPHEADER => $headers,
 ]);
 $resp = curl_exec($ch);
 $err  = curl_error($ch);
@@ -205,7 +177,20 @@ if ($code >= 200 && $code < 300 && is_array($data) && ($data['ok'] ?? null) !== 
     switch ($key) {
         case 'add':
             if (($data['result'] ?? '') === 'added') {
-                apprise_notify('Lease IP Added', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+                if ($lumStaticHdr === '1' || $lumStaticHdr === 'yes' || $lumStaticHdr === 'true') {
+                    apprise_notify('Lease IP Added (Static)', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+                } elseif ($lumStaticHdr === '0' || $lumStaticHdr === 'no' || $lumStaticHdr === 'false') {
+                    apprise_notify('Lease IP Added / Unmarked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+                } else {
+                    apprise_notify('Lease IP Added', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+                }
+            } else {
+                // If endpoint updates existing block on add, honor static header for notice
+                if ($lumStaticHdr === '1' || $lumStaticHdr === 'yes' || $lumStaticHdr === 'true') {
+                    apprise_notify('Lease IP Marked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+                } elseif ($lumStaticHdr === '0' || $lumStaticHdr === 'no' || $lumStaticHdr === 'false') {
+                    apprise_notify('Lease IP Unmarked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
+                }
             }
             break;
         case 'delete':
@@ -218,12 +203,6 @@ if ($code >= 200 && $code < 300 && is_array($data) && ($data['ok'] ?? null) !== 
             break;
         case 'prune':
             apprise_notify('Lease List Pruned', "by <code>{$who}</code> older than <code>{$hours}h</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-            break;
-        case 'static':
-            apprise_notify('Lease IP Marked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-            break;
-        case 'unstatic':
-            apprise_notify('Lease IP Unmarked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
             break;
     }
 }
