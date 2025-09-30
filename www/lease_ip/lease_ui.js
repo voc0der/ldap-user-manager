@@ -70,9 +70,13 @@
 
         const tdIp = document.createElement('td');
         tdIp.textContent = ent.ip || '';
+        if (ent.static === true) {
+          tdIp.textContent += ' (static)';
+        }
 
         const tdAct = document.createElement('td');
         tdAct.className = 'text-right';
+
         const delBtn = document.createElement('button');
         delBtn.textContent = 'Delete';
         delBtn.className = 'btn btn-default btn-sm';
@@ -88,7 +92,30 @@
             delBtn.disabled = false;
           }
         });
+
+        // NEW: Static toggle
+        const staticBtn = document.createElement('button');
+        staticBtn.textContent = (ent.static === true) ? 'Unset Static' : 'Set Static';
+        staticBtn.className = 'btn btn-default btn-sm';
+        staticBtn.style.marginLeft = '0.5rem';
+        staticBtn.addEventListener('click', async () => {
+          staticBtn.disabled = true;
+          try {
+            const action = (ent.static === true) ? 'unstatic' : 'static';
+            await call({ action, ip: ent.ip });
+            await refresh();
+            adminStatus.textContent = (action === 'static')
+              ? `Marked static: ${ent.ip}`
+              : `Unmarked static: ${ent.ip}`;
+          } catch (e) {
+            adminStatus.textContent = 'Static toggle failed: ' + e.message;
+          } finally {
+            staticBtn.disabled = false;
+          }
+        });
+
         tdAct.appendChild(delBtn);
+        tdAct.appendChild(staticBtn);
 
         tr.appendChild(tdLabel);
         tr.appendChild(tdTs);
@@ -143,7 +170,7 @@
       }
     });
 
-    // New: manual add for admins
+    // Manual add (admin)
     btnAddManual?.addEventListener('click', async () => {
       const ip = (manualIp?.value || '').trim();
       if (!ip) {
