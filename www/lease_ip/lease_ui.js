@@ -3,12 +3,8 @@
   const isAdmin = !!window.LEASE_IP.isAdmin;
   const API = '/lease_ip/api.php';
 
-  const qs = (o) => Object.entries(o)
-    .map(([k,v]) => v === undefined || v === null ? '' : encodeURIComponent(k)+'='+encodeURIComponent(String(v)))
-    .filter(Boolean).join('&');
-
-  const call = async (params) => {
-    const url = API + '?' + qs(params);
+  const callOne = async (name, value) => {
+    const url = API + '?' + encodeURIComponent(name) + '=' + encodeURIComponent(value ?? '');
     const res = await fetch(url, { credentials: 'include' });
     let data;
     try { data = await res.json(); } catch { data = { ok:false, error:'Invalid JSON from API' }; }
@@ -24,10 +20,10 @@
   const setBusy = (el, busy) => el && (el.disabled = !!busy);
 
   btnAdd?.addEventListener('click', async () => {
-    if (!clientIp) return userStatus.textContent = 'Cannot detect client IP.';
     setBusy(btnAdd, true);
     try {
-      const r = await call({ action: 'add' });
+      // value can be blank; server figures out effective IP for non-admins
+      const r = await callOne('add', clientIp || '');
       userStatus.textContent = (r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`;
     } catch (e) {
       userStatus.textContent = 'Add failed: ' + e.message;
@@ -35,10 +31,9 @@
   });
 
   btnDel?.addEventListener('click', async () => {
-    if (!clientIp) return userStatus.textContent = 'Cannot detect client IP.';
     setBusy(btnDel, true);
     try {
-      const r = await call({ action: 'delete' });
+      const r = await callOne('delete', clientIp || '');
       userStatus.textContent = (r.result === 'not_found') ? `Not present: ${r.ip}` : `Deleted: ${r.ip}`;
     } catch (e) {
       userStatus.textContent = 'Delete failed: ' + e.message;
@@ -70,9 +65,7 @@
 
         const tdIp = document.createElement('td');
         tdIp.textContent = ent.ip || '';
-        if (ent.static === true) {
-          tdIp.textContent += ' (static)';
-        }
+        if (ent.static === true) tdIp.textContent += ' (static)';
 
         const tdAct = document.createElement('td');
         tdAct.className = 'text-right';
@@ -83,7 +76,7 @@
         delBtn.addEventListener('click', async () => {
           delBtn.disabled = true;
           try {
-            await call({ action: 'delete', ip: ent.ip });
+            await callOne('delete', ent.ip);
             await refresh();
             adminStatus.textContent = `Deleted ${ent.ip}`;
           } catch (e) {
@@ -93,7 +86,6 @@
           }
         });
 
-        // NEW: Static toggle
         const staticBtn = document.createElement('button');
         staticBtn.textContent = (ent.static === true) ? 'Unset Static' : 'Set Static';
         staticBtn.className = 'btn btn-default btn-sm';
@@ -101,10 +93,10 @@
         staticBtn.addEventListener('click', async () => {
           staticBtn.disabled = true;
           try {
-            const action = (ent.static === true) ? 'unstatic' : 'static';
-            await call({ action, ip: ent.ip });
+            const op = (ent.static === true) ? 'unstatic' : 'static';
+            await callOne(op, ent.ip);
             await refresh();
-            adminStatus.textContent = (action === 'static')
+            adminStatus.textContent = (op === 'static')
               ? `Marked static: ${ent.ip}`
               : `Unmarked static: ${ent.ip}`;
           } catch (e) {
@@ -129,7 +121,7 @@
     const refresh = async () => {
       adminStatus.textContent = 'Loading...';
       try {
-        const r = await call({ action: 'list' });
+        const r = await callOne('list', '1');
         adminStatus.textContent = '';
         renderRows(r.entries || []);
       } catch (e) {
@@ -145,7 +137,7 @@
       if (!confirm('Clear ALL entries?')) return;
       btnClear.disabled = true;
       try {
-        await call({ action: 'clear' });
+        await callOne('clear', '1');
         await refresh();
         adminStatus.textContent = 'Cleared all';
       } catch (e) {
@@ -160,7 +152,7 @@
       if (!(n > 0)) return adminStatus.textContent = 'Enter a positive hour count.';
       btnPrune.disabled = true;
       try {
-        await call({ action: 'prune', hours: n });
+        await callOne('prune', String(n));
         await refresh();
         adminStatus.textContent = `Pruned entries older than ${n} hours`;
       } catch (e) {
@@ -170,16 +162,12 @@
       }
     });
 
-    // Manual add (admin)
     btnAddManual?.addEventListener('click', async () => {
       const ip = (manualIp?.value || '').trim();
-      if (!ip) {
-        adminStatus.textContent = 'Enter an IP address.';
-        return;
-      }
+      if (!ip) { adminStatus.textContent = 'Enter an IP address.'; return; }
       btnAddManual.disabled = true;
       try {
-        const r = await call({ action: 'add', ip });
+        const r = await callOne('add', ip);
         await refresh();
         adminStatus.textContent = (r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`;
         manualIp.value = '';
