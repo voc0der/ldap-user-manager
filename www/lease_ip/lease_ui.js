@@ -3,9 +3,12 @@
   const isAdmin = !!window.LEASE_IP.isAdmin;
   const API = '/lease_ip/api.php';
 
-  const callOne = async (name, value) => {
+  const callOne = async (name, value, extraHeaders) => {
     const url = API + '?' + encodeURIComponent(name) + '=' + encodeURIComponent(value ?? '');
-    const res = await fetch(url, { credentials: 'include' });
+    const res = await fetch(url, {
+      credentials: 'include',
+      headers: extraHeaders || {}
+    });
     let data;
     try { data = await res.json(); } catch { data = { ok:false, error:'Invalid JSON from API' }; }
     if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP '+res.status));
@@ -22,7 +25,6 @@
   btnAdd?.addEventListener('click', async () => {
     setBusy(btnAdd, true);
     try {
-      // value can be blank; server figures out effective IP for non-admins
       const r = await callOne('add', clientIp || '');
       userStatus.textContent = (r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`;
     } catch (e) {
@@ -50,6 +52,7 @@
     const pruneHours = document.getElementById('prune-hours');
     const adminStatus = document.getElementById('admin-status');
     const manualIp = document.getElementById('manual-ip');
+    const manualStatic = document.getElementById('manual-static');
     const btnAddManual = document.getElementById('btn-add-manual');
 
     const renderRows = (entries) => {
@@ -93,12 +96,10 @@
         staticBtn.addEventListener('click', async () => {
           staticBtn.disabled = true;
           try {
-            const op = (ent.static === true) ? 'unstatic' : 'static';
-            await callOne(op, ent.ip);
+            const makeStatic = !(ent.static === true);
+            await callOne('add', ent.ip, { 'X-LUM-Static': makeStatic ? '1' : '0' });
             await refresh();
-            adminStatus.textContent = (op === 'static')
-              ? `Marked static: ${ent.ip}`
-              : `Unmarked static: ${ent.ip}`;
+            adminStatus.textContent = makeStatic ? `Marked static: ${ent.ip}` : `Unmarked static: ${ent.ip}`;
           } catch (e) {
             adminStatus.textContent = 'Static toggle failed: ' + e.message;
           } finally {
@@ -167,10 +168,12 @@
       if (!ip) { adminStatus.textContent = 'Enter an IP address.'; return; }
       btnAddManual.disabled = true;
       try {
-        const r = await callOne('add', ip);
+        const hdrs = manualStatic?.checked ? { 'X-LUM-Static': '1' } : undefined;
+        const r = await callOne('add', ip, hdrs);
         await refresh();
         adminStatus.textContent = (r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`;
         manualIp.value = '';
+        if (manualStatic) manualStatic.checked = false;
       } catch (e) {
         adminStatus.textContent = 'Add failed: ' + e.message;
       } finally {
