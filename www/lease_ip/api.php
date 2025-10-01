@@ -45,29 +45,6 @@ function get_client_ip(): ?string {
 }
 $clientIp = get_client_ip();
 
-// ---- Matrix/Apprise notify helper ----
-function apprise_notify(string $title, string $htmlBody): void {
-    $domain = getenv('EMAIL_DOMAIN') ?: getenv('DOMAIN_NAME') ?: ($_SERVER['SERVER_NAME'] ?? 'localhost');
-    $url = getenv('APPRISE_URL') ?: ('https://notify.' . $domain . '/notify/apprise');
-    $tag = getenv('APPRISE_TAG') ?: 'matrix_group_system_alerts';
-
-    $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $url,
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => [
-            'body' => "🔐 <b>{$title}</b><br />{$htmlBody}",
-            'tag'  => $tag,
-        ],
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_CONNECTTIMEOUT => 2,
-        CURLOPT_TIMEOUT => 3,
-        CURLOPT_USERAGENT => 'LUM-Lease-UI/1.0',
-    ]);
-    @curl_exec($ch); // fire-and-forget
-    curl_close($ch);
-}
-
 // ---- Single-parameter input enforcement ----
 $allowed = ['list','clear','add','delete','prune'];
 $getKeys = array_keys($_GET ?? []);
@@ -165,46 +142,6 @@ $data = json_decode($resp, true);
 if ($data === null) {
     echo json_encode(['ok'=>false, 'error'=>'Invalid JSON from lease endpoint', 'status'=>$code, 'body'=>$resp]);
     exit;
-}
-
-// ---- Matrix notifications on success ----
-if ($code >= 200 && $code < 300 && is_array($data) && ($data['ok'] ?? null) !== false) {
-    $who  = htmlspecialchars((string)$userId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    $ipH  = htmlspecialchars((string)($data['ip'] ?? $effectiveIp ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    $host = htmlspecialchars((string)($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    $ts   = date('Y-m-d H:i:s T');
-
-    switch ($key) {
-        case 'add':
-            if (($data['result'] ?? '') === 'added') {
-                if ($lumStaticHdr === '1' || $lumStaticHdr === 'yes' || $lumStaticHdr === 'true') {
-                    apprise_notify('Lease IP Added (Static)', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-                } elseif ($lumStaticHdr === '0' || $lumStaticHdr === 'no' || $lumStaticHdr === 'false') {
-                    apprise_notify('Lease IP Added / Unmarked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-                } else {
-                    apprise_notify('Lease IP Added', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-                }
-            } else {
-                // If endpoint updates existing block on add, honor static header for notice
-                if ($lumStaticHdr === '1' || $lumStaticHdr === 'yes' || $lumStaticHdr === 'true') {
-                    apprise_notify('Lease IP Marked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-                } elseif ($lumStaticHdr === '0' || $lumStaticHdr === 'no' || $lumStaticHdr === 'false') {
-                    apprise_notify('Lease IP Unmarked Static', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-                }
-            }
-            break;
-        case 'delete':
-            if (($data['result'] ?? '') === 'deleted') {
-                apprise_notify('Lease IP Removed', "<code>{$ipH}</code> by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-            }
-            break;
-        case 'clear':
-            apprise_notify('Lease List Cleared', "by <code>{$who}</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-            break;
-        case 'prune':
-            apprise_notify('Lease List Pruned', "by <code>{$who}</code> older than <code>{$hours}h</code><br />on <code>{$host}</code> @ <code>{$ts}</code>");
-            break;
-    }
 }
 
 http_response_code(($code >= 200 && $code < 300) ? 200 : $code);
