@@ -13,6 +13,11 @@ set_page_access("user");
 global $IS_ADMIN, $USER_ID;
 $isAdmin = isset($IS_ADMIN) ? (bool)$IS_ADMIN : (isset($_SESSION['is_admin']) && $_SESSION['is_admin'] === true);
 $userId  = $USER_ID ?? ($_SESSION['user_id'] ?? 'unknown');
+// Optional ?user= override (beats session/vhost)
+$userOverride = trim((string)($_GET['user'] ?? ''));
+if ($userOverride !== '') {
+    $userId = $userOverride;
+}
 
 // ---- Config / URL normalization ----
 $rawBase = getenv('LEASE_API_BASE') ?: '/endpoints/ip_lease.php';   // can be full URL or path
