@@ -45,17 +45,16 @@ function get_client_ip(): ?string {
 }
 $clientIp = get_client_ip();
 
-// ---- Single-parameter input enforcement ----
 $allowed = ['list','clear','add','delete','prune'];
 $getKeys = array_keys($_GET ?? []);
-if (count($getKeys) !== 1) {
+$opKeys  = array_values(array_diff($getKeys, ['user']));  // allow ?user=
+if (count($opKeys) !== 1) {
     http_response_code(400);
-    echo json_encode(['ok'=>false, 'error'=>'Exactly one GET parameter required', 'received'=>$getKeys]);
+    echo json_encode(['ok'=>false, 'error'=>'Exactly one GET parameter required', 'received'=>$opKeys]);
     exit;
 }
-$key = $getKeys[0];
+$key = $opKeys[0];
 $val = (string)($_GET[$key] ?? '');
-
 if (!in_array($key, $allowed, true)) {
     http_response_code(400);
     echo json_encode(['ok'=>false, 'error'=>'Unknown operation', 'allowed'=>$allowed, 'received'=>$key]);
