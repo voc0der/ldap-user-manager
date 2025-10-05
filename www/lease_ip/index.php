@@ -84,7 +84,7 @@ render_header('Lease IP');
         </td>
       </tr>
       <tr>
-        <td colspan="4">
+        <td colspan="5">
           <button id="btn-clear" class="btn btn-default">Clear all</button>
           &nbsp;
           <label>Prune (hours):
