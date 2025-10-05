@@ -291,6 +291,34 @@ function render_header($title="",$menu=TRUE) {
 
 }
 
+######################################################
+
+function format_module_label($module) {
+  // Start with your current behavior
+  $label = ucwords(str_replace('_', ' ', $module));
+
+  // Fix common initialisms/acronyms
+  // (Surround with spaces so we fix beginning/middle/end uniformly, then trim)
+  $pad = ' ' . $label . ' ';
+  $pad = strtr($pad, [
+    ' Ip '   => ' IP ',
+    ' Id '   => ' ID ',
+    ' Ui '   => ' UI ',
+    ' Url '  => ' URL ',
+    ' Api '  => ' API ',
+    ' Ldap ' => ' LDAP ',
+    ' Sso '  => ' SSO ',
+    ' Ssh '  => ' SSH ',
+    ' Vpn '  => ' VPN ',
+    ' Tls '  => ' TLS ',
+  ]);
+
+  // Special cases that aren’t plain uppercase
+  $pad = preg_replace('/\bOauth\b/u', 'OAuth', $pad);
+  $pad = preg_replace('/\bMtls\b/u',  'mTLS',   $pad);
+
+  return trim($pad);
+}
 
 ######################################################
 
@@ -312,7 +340,7 @@ function render_menu() {
      <?php
      foreach ($MODULES as $module => $access) {
 
-      $this_module_name=stripslashes(ucwords(preg_replace('/_/',' ',$module)));
+      $$this_module_name = format_module_label(stripslashes($module));
 
       $show_this_module = TRUE;
       if ($VALIDATED == TRUE) {
