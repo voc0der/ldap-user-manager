@@ -340,7 +340,7 @@ function render_menu() {
      <?php
      foreach ($MODULES as $module => $access) {
 
-      $$this_module_name = format_module_label(stripslashes($module));
+      $this_module_name = format_module_label(stripslashes($module));
 
       $show_this_module = TRUE;
       if ($VALIDATED == TRUE) {
