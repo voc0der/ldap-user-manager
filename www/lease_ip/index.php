@@ -57,7 +57,7 @@ render_header('Lease IP');
   <table class="table table-striped">
     <thead>
       <tr>
-        <th colspan="4">
+        <th colspan="5">
           Active Leases
           <span class="smallprint"> &nbsp; Total: <span id="count">–</span></span>
           &nbsp; <button id="btn-refresh" class="btn btn-default">Refresh list</button>
