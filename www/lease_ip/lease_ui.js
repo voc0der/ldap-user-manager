@@ -55,8 +55,55 @@
     const manualStatic = document.getElementById('manual-static');
     const btnAddManual = document.getElementById('btn-add-manual');
 
+    // Keep last list so we can re-render countdowns without refetch
+    let currentEntries = [];
+
+    // --- Helpers for Expiry --------------------------------------------------
+
+    const getTtlHours = () => {
+      const n = parseFloat(pruneHours?.value || '24');
+      return (n > 0) ? n : 24;
+    };
+
+    // Try several shapes: ent.ts (epoch s/ms), ISO string, or the human Timestamp
+    const getTimestampMs = (ent) => {
+      if (ent.ts !== undefined && ent.ts !== null) {
+        const n = Number(ent.ts);
+        if (Number.isFinite(n)) {
+          // Heuristic: > 2e12 => ms; > 2e9 => ms; otherwise assume seconds
+          return (n > 2e12 ? n : (n > 2e9 ? n : n * 1000));
+        }
+        const d1 = Date.parse(ent.ts);
+        if (!Number.isNaN(d1)) return d1;
+      }
+      if (ent.timestamp) {
+        const d2 = Date.parse(ent.timestamp);
+        if (!Number.isNaN(d2)) return d2;
+      }
+      return NaN;
+    };
+
+    const fmtRemaining = (ms) => {
+      if (!Number.isFinite(ms)) return '—';
+      if (ms <= 0) return 'expired';
+      const totalMin = Math.floor(ms / 60000);
+      const d = Math.floor(totalMin / (60 * 24));
+      const h = Math.floor((totalMin - d * 1440) / 60);
+      const m = totalMin - d * 1440 - h * 60;
+      let out = '';
+      if (d) out += d + 'd ';
+      if (h || d) out += h + 'h ';
+      out += m + 'm';
+      return out.trim();
+    };
+
+    // ------------------------------------------------------------------------
+
     const renderRows = (entries) => {
       tbody.innerHTML = '';
+      const ttlHrs = getTtlHours();
+      const now = Date.now();
+
       for (const ent of entries) {
         const tr = document.createElement('tr');
 
@@ -69,6 +116,23 @@
         const tdIp = document.createElement('td');
         tdIp.textContent = ent.ip || '';
         if (ent.static === true) tdIp.textContent += ' (static)';
+
+        // NEW: Expiry column
+        const tdExp = document.createElement('td');
+        let expText = '—';
+        let expTitle = '';
+        if (ent.static === true) {
+          expText = 'static';
+        } else {
+          const tsms = getTimestampMs(ent);
+          if (Number.isFinite(tsms)) {
+            const expAt = tsms + ttlHrs * 3600000;
+            expText = fmtRemaining(expAt - now);
+            expTitle = new Date(expAt).toLocaleString();
+          }
+        }
+        tdExp.textContent = expText;
+        if (expTitle) tdExp.title = expTitle;
 
         const tdAct = document.createElement('td');
         tdAct.className = 'text-right';
@@ -113,6 +177,7 @@
         tr.appendChild(tdLabel);
         tr.appendChild(tdTs);
         tr.appendChild(tdIp);
+        tr.appendChild(tdExp);     // <— inserted before Actions
         tr.appendChild(tdAct);
         tbody.appendChild(tr);
       }
@@ -124,9 +189,11 @@
       try {
         const r = await callOne('list', '1');
         adminStatus.textContent = '';
-        renderRows(r.entries || []);
+        currentEntries = r.entries || [];
+        renderRows(currentEntries);
       } catch (e) {
         adminStatus.textContent = 'List failed: ' + e.message;
+        currentEntries = [];
         tbody.innerHTML = '';
         count.textContent = '0';
       }
@@ -180,6 +247,16 @@
         btnAddManual.disabled = false;
       }
     });
+
+    // Update countdowns when TTL changes
+    pruneHours?.addEventListener('input', () => {
+      if (currentEntries.length) renderRows(currentEntries);
+    });
+
+    // Live countdown every minute
+    setInterval(() => {
+      if (currentEntries.length) renderRows(currentEntries);
+    }, 60000);
 
     // initial load
     refresh();
