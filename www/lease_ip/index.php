@@ -28,77 +28,90 @@ render_header('Lease IP');
 
 <div class="container">
 
-  <!-- User section -->
-  <table class="table table-striped">
-    <thead>
-      <tr><th colspan="2">Lease IP (Internal)</th></tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>Detected client IP</td>
-        <td><code id="detected-ip"><?php echo htmlspecialchars($clientIp ?? 'unknown'); ?></code></td>
-      </tr>
-      <tr>
-        <td>Actions</td>
-        <td>
-          <button id="btn-add" class="btn btn-default">Add my IP</button>
-          <button id="btn-del" class="btn btn-default">Remove my IP</button>
-        </td>
-      </tr>
-      <tr>
-        <td>Status</td>
-        <td><span id="user-status" class="smallprint"></span></td>
-      </tr>
-    </tbody>
-  </table>
+  <!-- User section (panel) -->
+  <div class="col-sm-8 col-sm-offset-2">
+    <div class="panel panel-default">
+      <div class="panel-heading text-center">Lease IP (Internal)</div>
+      <div class="panel-body">
+        <div class="table-responsive">
+          <table class="table table-striped">
+            <tbody>
+              <tr>
+                <td>Detected client IP</td>
+                <td><code id="detected-ip"><?php echo htmlspecialchars($clientIp ?? 'unknown'); ?></code></td>
+              </tr>
+              <tr>
+                <td>Actions</td>
+                <td>
+                  <button id="btn-add" class="btn btn-default">Add my IP</button>
+                  <button id="btn-del" class="btn btn-default">Remove my IP</button>
+                </td>
+              </tr>
+              <tr>
+                <td>Status</td>
+                <td><span id="user-status" class="smallprint"></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div><!-- /.table-responsive -->
+      </div><!-- /.panel-body -->
+    </div><!-- /.panel -->
+  </div><!-- /.col -->
 
   <?php if ($isAdmin): ?>
-  <!-- Admin section -->
-  <table class="table table-striped">
-    <thead>
-      <tr>
-        <th colspan="5">
-          Active Leases
-          <span class="smallprint"> &nbsp; Total: <span id="count">–</span></span>
-          &nbsp; <button id="btn-refresh" class="btn btn-default">Refresh list</button>
-        </th>
-      </tr>
-      <tr>
-        <th>Label</th>
-        <th>Timestamp</th>
-        <th>IP</th>
-        <th>Expiry</th>
-        <th class="text-right">Actions</th>
-      </tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-    <tfoot>
-      <tr>
-        <td colspan="5">
-          <!-- Manual add (admin) -->
-          <label style="margin-right:.5rem;">Add IP (admin):</label>
-          <input id="manual-ip" type="text" placeholder="e.g. 203.0.113.7 or 2001:db8::1" style="max-width: 20rem;">
-          &nbsp; <label style="margin:0 .5rem 0 .75rem;"><input id="manual-static" type="checkbox"> Static</label>
-          <button id="btn-add-manual" class="btn btn-default">Add IP</button>
-          <span class="smallprint" style="margin-left:.5rem;">Static entries are skipped by prune.</span>
-        </td>
-      </tr>
-      <tr>
-        <td colspan="5">
-          <button id="btn-clear" class="btn btn-default">Clear all</button>
-          &nbsp;
-          <label>Prune (hours):
-            <input id="prune-hours" type="number" min="1" value="96" style="width:6em;">
-          </label>
-          <button id="btn-prune" class="btn btn-default">Run prune</button>
-          <span id="admin-status" class="smallprint" style="margin-left:.5rem;"></span>
-        </td>
-      </tr>
-    </tfoot>
-  </table>
+  <!-- Admin section (panel) -->
+  <div class="col-sm-10 col-sm-offset-1">
+    <div class="panel panel-default">
+      <div class="panel-heading text-center">
+        Active Leases
+        <span class="smallprint">&nbsp; Total: <span id="count">–</span></span>
+        <button id="btn-refresh" class="btn btn-default pull-right">Refresh list</button>
+        <div class="clearfix"></div>
+      </div>
+      <div class="panel-body">
+        <div class="table-responsive">
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th>Label</th>
+                <th>Timestamp</th>
+                <th>IP</th>
+                <th>Expiry</th>
+                <th class="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+            <tfoot>
+              <tr>
+                <td colspan="5">
+                  <!-- Manual add (admin) -->
+                  <label style="margin-right:.5rem;">Add IP (admin):</label>
+                  <input id="manual-ip" type="text" placeholder="e.g. 203.0.113.7 or 2001:db8::1" style="max-width: 20rem;">
+                  &nbsp; <label style="margin:0 .5rem 0 .75rem;"><input id="manual-static" type="checkbox"> Static</label>
+                  <button id="btn-add-manual" class="btn btn-default">Add IP</button>
+                  <span class="smallprint" style="margin-left:.5rem;">Static entries are skipped by prune.</span>
+                </td>
+              </tr>
+              <tr>
+                <td colspan="5">
+                  <button id="btn-clear" class="btn btn-default">Clear all</button>
+                  &nbsp;
+                  <label>Prune (hours):
+                    <input id="prune-hours" type="number" min="1" value="96" style="width:6em;">
+                  </label>
+                  <button id="btn-prune" class="btn btn-default">Run prune</button>
+                  <span id="admin-status" class="smallprint" style="margin-left:.5rem;"></span>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div><!-- /.table-responsive -->
+      </div><!-- /.panel-body -->
+    </div><!-- /.panel -->
+  </div><!-- /.col -->
   <?php endif; ?>
 
-</div>
+</div><!-- /.container -->
 
 <script>
   window.LEASE_IP = {
