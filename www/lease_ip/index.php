@@ -74,7 +74,7 @@ render_header('Lease IP');
     <tbody id="tbody"></tbody>
     <tfoot>
       <tr>
-        <td colspan="4">
+        <td colspan="5">
           <!-- Manual add (admin) -->
           <label style="margin-right:.5rem;">Add IP (admin):</label>
           <input id="manual-ip" type="text" placeholder="e.g. 203.0.113.7 or 2001:db8::1" style="max-width: 20rem;">
