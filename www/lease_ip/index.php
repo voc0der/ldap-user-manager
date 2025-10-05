@@ -88,7 +88,7 @@ render_header('Lease IP');
           <button id="btn-clear" class="btn btn-default">Clear all</button>
           &nbsp;
           <label>Prune (hours):
-            <input id="prune-hours" type="number" min="1" value="24" style="width:6em;">
+            <input id="prune-hours" type="number" min="1" value="96" style="width:6em;">
           </label>
           <button id="btn-prune" class="btn btn-default">Run prune</button>
           <span id="admin-status" class="smallprint" style="margin-left:.5rem;"></span>
