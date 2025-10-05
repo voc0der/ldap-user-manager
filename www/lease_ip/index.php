@@ -67,6 +67,7 @@ render_header('Lease IP');
         <th>Label</th>
         <th>Timestamp</th>
         <th>IP</th>
+        <th>Expiry</th>
         <th class="text-right">Actions</th>
       </tr>
     </thead>
