@@ -2,6 +2,8 @@
   const clientIp = window.LEASE_IP.clientIp || null;
   const isAdmin = !!window.LEASE_IP.isAdmin;
   const API = '/lease_ip/api.php';
+  // Exposed by the admin block when present
+  const adminRefresh = (opts) => window.LEASE_UI_softRefresh?.(opts);
 
   // === Fetch helpers =========================================================
   const callOne = async (name, value, extraHeaders) => {
@@ -28,7 +30,7 @@
     try {
       const r = await callOne('add', clientIp || '');
       userStatus.textContent = (r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`;
-      if (isAdmin) softRefresh({ force: true }); // reflect instantly in list if admin is viewing
+      if (isAdmin) adminRefresh({ force: true }); // reflect instantly in list if admin is viewing
     } catch (e) {
       userStatus.textContent = 'Add failed: ' + e.message;
     } finally { setBusy(btnAdd, false); }
@@ -39,7 +41,7 @@
     try {
       const r = await callOne('delete', clientIp || '');
       userStatus.textContent = (r.result === 'not_found') ? `Not present: ${r.ip}` : `Deleted: ${r.ip}`;
-      if (isAdmin) softRefresh({ force: true });
+      if (isAdmin) adminRefresh({ force: true });
     } catch (e) {
       userStatus.textContent = 'Delete failed: ' + e.message;
     } finally { setBusy(btnDel, false); }
@@ -265,6 +267,7 @@
         scheduleNextPoll(backoffMs);
       }
     }
+    window.LEASE_UI_softRefresh = softRefresh;
 
     // --- Polling & visibility management ------------------------------------
     function pollIntervalMs() {
@@ -272,7 +275,12 @@
     }
 
     function clearPoller() {
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (pollTimer) {
+        // We use both setInterval and setTimeout in different paths.
+        clearTimeout(pollTimer);
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
     }
 
     function startPoller() {
