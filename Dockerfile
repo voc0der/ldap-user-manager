@@ -70,23 +70,14 @@ ARG LDAP_TLS_CACERT=ca.crt
 RUN mkdir -p /etc/ldap && \
     echo "TLS_CACERT /opt/ssl/${LDAP_TLS_CACERT}" > /etc/ldap/ldap.conf
 
-# Set up user and group with PUID and PGID
-ARG PUID=1000
-ARG PGID=1000
-RUN groupadd -g ${PGID} appgroup && \
-    useradd -u ${PUID} -g appgroup -m appuser && \
-    mkdir -p /home/appuser && \
-    chown -R appuser:appgroup /home/appuser /opt/ldap_user_manager
+# >>> CHANGED: remove build-time user/group creation (PUID/PGID handled at runtime by entrypoint)
+# (deleted the ARG PUID/PGID + useradd/groupadd + USER appuser block)
 
-# Create mTLS state directories (codes/tokens/logs) with correct perms
+# Create mTLS state directories (codes/tokens/logs); ownership fixed at runtime in entrypoint
 RUN set -eux; \
     install -d -m 0770 /opt/ldap_user_manager/data/mtls/codes \
                        /opt/ldap_user_manager/data/mtls/tokens \
-                       /opt/ldap_user_manager/data/mtls/logs; \
-    chown -R www-data:www-data /opt/ldap_user_manager/data/mtls
-
-# Switch to the non-root user
-USER appuser
+                       /opt/ldap_user_manager/data/mtls/logs
 
 # Set the entrypoint and command
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
