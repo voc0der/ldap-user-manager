@@ -13,6 +13,7 @@
                     'change_password' => 'auth',
                     'account_manager' => 'admin',
                     'lease_ip'        => 'auth',
+                    'mtls_certificate' => 'auth',
                   );
 
 if ($ACCOUNT_REQUESTS_ENABLED == TRUE) {
