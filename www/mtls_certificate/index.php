@@ -34,11 +34,8 @@ if (empty($_SESSION['csrf'])) {
 render_header("mTLS Certificate");
 ?>
 <div class="container" style="max-width:860px;margin-top:20px">
-  <h2 class="page-header">mTLS Certificate</h2>
-  <p class="text-muted">A one-time code will be sent to your account email. After verification, you’ll have 5 minutes to fetch your certificate (single-use link). Identity and group membership are enforced by the proxy headers.</p>
-
   <div class="panel panel-default">
-    <div class="panel-heading">Identity</div>
+    <div class="panel-heading text-center">Identity</div>
     <div class="panel-body">
       <p><strong>User:</strong> <code><?=htmlentities($uid)?></code><br/>
          <strong>Email:</strong> <code><?=htmlentities($email ?? '(unknown)')?></code><br/>
@@ -47,7 +44,7 @@ render_header("mTLS Certificate");
   </div>
 
   <div class="panel panel-default">
-    <div class="panel-heading">1. Send verification code</div>
+    <div class="panel-heading text-center">1. Send verification code</div>
     <div class="panel-body">
       <button id="btn-send" class="btn btn-primary">Send code</button>
       <span id="send-status" class="text-info" style="margin-left:10px"></span>
@@ -55,7 +52,7 @@ render_header("mTLS Certificate");
   </div>
 
   <div class="panel panel-default">
-    <div class="panel-heading">2. Verify code</div>
+    <div class="panel-heading text-center">2. Verify code</div>
     <div class="panel-body">
       <form id="verify-form" class="form-inline" onsubmit="return false">
         <div class="form-group">
