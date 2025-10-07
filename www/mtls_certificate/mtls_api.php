@@ -5,6 +5,7 @@ include_once 'web_functions.inc.php';
 @session_start();
 header('Content-Type: application/json');
 
+
 function json_fail(string $msg, int $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg]); exit; }
 function json_ok(array $o=[]){ echo json_encode(['ok'=>true] + $o); exit; }
 
@@ -120,13 +121,43 @@ if ($action === 'verify_code') {
   $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
   file_put_contents($tfile, json_encode($tok), LOCK_EX);
 
-  // Optional apprise notify token issued
-  if (!empty($APPRISE_URL)) {
+// Compute expiry days for the user's current certificate (best effort)
+$expires_days = null;
+$CERT_BASE = getenv('MTLS_CERT_BASE') ?: '/mnt/mtls-certs';
+$cert_dir  = $CERT_BASE . '/' . preg_replace('/[^a-zA-Z0-9_.-]/', '_', $uid);
+$crt_path  = $cert_dir . '/client.crt';
+$p12_path  = $cert_dir . '/client.p12';
+if (is_file($crt_path)) {
+  $pem = @file_get_contents($crt_path);
+  if ($pem !== false) {
+    $x = @openssl_x509_parse($pem);
+    if ($x && isset($x['validTo_time_t'])) {
+      $expires_days = (int) floor(($x['validTo_time_t'] - time()) / 86400);
+    }
+  }
+} elseif (is_file($p12_path)) {
+  $p12pass = getenv('MTLS_P12_PASS') ?: '';
+  if ($p12pass !== '') {
+    $p12 = @file_get_contents($p12_path);
+    $out = [];
+    if ($p12 !== false && @openssl_pkcs12_read($p12, $out, $p12pass)) {
+      if (!empty($out['cert'])) {
+        $x = @openssl_x509_parse($out['cert']);
+        if ($x && isset($x['validTo_time_t'])) {
+          $expires_days = (int) floor(($x['validTo_time_t'] - time()) / 86400);
+        }
+      }
+    }
+  }
+}
+
+// Optional apprise notify token issued
+if (!empty($APPRISE_URL)) {
     $msg = "mTLS token issued for {$uid}, expires in 5m";
     @exec('curl -s -X POST --form-string ' . escapeshellarg('body=' . $msg) . ' ' . escapeshellarg($APPRISE_URL) . ' >/dev/null 2>&1 &');
   }
 
-  json_ok(['token'=>$token]);
+  json_ok(['token'=>$token, 'expires_days'=>$expires_days]);
 }
 
 json_fail('Unknown action', 400);

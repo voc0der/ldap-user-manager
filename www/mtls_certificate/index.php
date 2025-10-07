@@ -4,48 +4,52 @@ set_include_path('.:' . __DIR__ . '/../includes/');
 include_once 'web_functions.inc.php';
 include_once 'module_functions.inc.php';
 
-// Page requires authenticated session; Authelia should front this path.
-set_page_access('auth'); // enforces $VALIDATED and session
-
+// Require authenticated session (proxy headers provided by Authelia)
+set_page_access('auth');
 @session_start();
 
-// --- Security: trust only proxy headers (ensure your reverse proxy strips inbound X-*) ---
-function header_val(string $k): ?string {
+// Trusted proxy headers (must be set by your reverse proxy)
+function h(string $k): ?string {
   $k = 'HTTP_' . strtoupper(str_replace('-', '_', $k));
   return isset($_SERVER[$k]) ? trim((string)$_SERVER[$k]) : null;
 }
 
-$uid   = header_val('Remote-User') ?: ($_SESSION['uid'] ?? null);
-$email = header_val('Remote-Email') ?: ($_SESSION['email'] ?? null);
-$groups_raw = header_val('Remote-Groups') ?: '';
-
-// Optionally re-resolve via LDAP (safer). If available, prefer LDAP canonical values.
-try {
-  // Robust exact group check
-$groups = array_filter(array_map('trim', preg_split('/[;,\s]+/', (string)$groups_raw)));
-$has_mtls = in_array('mtls', $groups, true);
+$uid         = h('Remote-User')   ?: ($_SESSION['uid']   ?? null);
+$email       = h('Remote-Email')  ?: ($_SESSION['email'] ?? null);
+$groups_raw  = h('Remote-Groups') ?: '';
+$groups_list = array_filter(array_map('trim', preg_split('/[;,\s]+/', (string)$groups_raw)));
+$has_mtls    = in_array('mtls', $groups_list, true);
 
 if (!$uid || !$has_mtls) {
   render_header("mTLS Certificate", false);
-  echo '<div class="container"><div class="alert alert-danger" role="alert">Access denied: you must be a member of the <code>mtls</code> group.</div></div>';
+  echo '<div class="container" style="max-width:860px;margin-top:20px"><div class="alert alert-danger">Access denied: you must be a member of the <code>mtls</code> group.</div></div>';
   render_footer();
   exit;
 }
 
-// CSRF token
-if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
+// CSRF token for API posts
+if (empty($_SESSION['csrf'])) {
+  $_SESSION['csrf'] = bin2hex(random_bytes(16));
+}
 
 render_header("mTLS Certificate", false);
 ?>
 <div class="container" style="max-width:860px;margin-top:20px">
-  <h2>mTLS Certificate</h2>
-  <p class="text-muted">Step-up verification required. A one-time code will be sent to your account email. After verification, you’ll have 5 minutes to fetch your certificate (single-use download token).</p>
+  <h2 class="page-header">mTLS Certificate</h2>
+  <p class="text-muted">A one-time code will be sent to your account email. After verification, you’ll have 5 minutes to fetch your certificate (single-use link). Identity and group membership are enforced by the proxy headers.</p>
+
+  <div class="panel panel-default">
+    <div class="panel-heading">Identity</div>
+    <div class="panel-body">
+      <p><strong>User:</strong> <code><?=htmlentities($uid)?></code><br/>
+         <strong>Email:</strong> <code><?=htmlentities($email ?? '(unknown)')?></code><br/>
+         <strong>Groups:</strong> <code><?=htmlentities(implode(', ', $groups_list))?></code></p>
+    </div>
+  </div>
 
   <div class="panel panel-default">
     <div class="panel-heading">1. Send verification code</div>
     <div class="panel-body">
-      <p><strong>User:</strong> <code><?=htmlentities($uid)?></code><br/>
-         <strong>Email:</strong> <code><?=htmlentities($email ?? '(unknown)')?></code></p>
       <button id="btn-send" class="btn btn-primary">Send code</button>
       <span id="send-status" class="text-info" style="margin-left:10px"></span>
     </div>
@@ -66,9 +70,10 @@ render_header("mTLS Certificate", false);
   </div>
 
   <div class="panel panel-default">
-    <div class="panel-heading">3. Download (activated after verification)</div>
+    <div class="panel-heading">3. Download</div>
     <div class="panel-body">
       <div id="dl-area" class="text-muted">No token yet.</div>
+      <div id="expiry-hint" class="help-block" style="margin-top:10px;"></div>
     </div>
   </div>
 </div>
@@ -77,7 +82,8 @@ render_header("mTLS Certificate", false);
 (function(){
   const csrf = <?= json_encode($_SESSION['csrf']) ?>;
   function q(sel){ return document.querySelector(sel); }
-  function msg(el, text, cls){ el.textContent = text; if(cls) {el.className='text-' + cls;} }
+  function msg(el, text, kind){ el.textContent = text; el.className = kind ? ('text-' + kind) : ''; }
+
   q('#btn-send').addEventListener('click', async () => {
     const s = q('#send-status'); msg(s, 'Sending...', 'info');
     try {
@@ -95,8 +101,8 @@ render_header("mTLS Certificate", false);
   });
 
   q('#btn-verify').addEventListener('click', async () => {
-    const v = q('#code').value.trim();
     const s = q('#verify-status'); msg(s, 'Verifying...', 'info');
+    const v = q('#code').value.trim();
     try {
       const r = await fetch('mtls_api.php?action=verify_code', {
         method: 'POST',
@@ -105,7 +111,8 @@ render_header("mTLS Certificate", false);
       });
       const j = await r.json();
       if(!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      // Show download link (single-use token)
+
+      // Download link
       const area = q('#dl-area');
       area.innerHTML = '';
       const a = document.createElement('a');
@@ -113,6 +120,23 @@ render_header("mTLS Certificate", false);
       a.textContent = 'Download certificate (valid 5 minutes, single-use)';
       a.className = 'btn btn-warning';
       area.appendChild(a);
+
+      // Expiry hint
+      const hint = q('#expiry-hint');
+      if (typeof j.expires_days === 'number') {
+        const d = j.expires_days;
+        if (d < 0) {
+          hint.textContent = 'Certificate appears expired.';
+          hint.className = 'text-danger';
+        } else {
+          hint.textContent = 'Your current certificate expires in about ' + d + ' day' + (d===1?'':'s') + '.';
+          hint.className = 'text-muted';
+        }
+      } else {
+        hint.textContent = 'Expiry could not be determined.';
+        hint.className = 'text-warning';
+      }
+
       msg(s, 'Verified. Token issued.', 'success');
     } catch(e) {
       msg(s, e.message, 'danger');
