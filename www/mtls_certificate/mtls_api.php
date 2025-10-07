@@ -7,6 +7,55 @@ include_once 'web_functions.inc.php';
 header('Content-Type: application/json');
 
 // ---------- Helpers ----------
+// --- MAILER (SMTP via PHPMailer if env present; else fallback to mail()) ---
+function mtls_send_mail($to, $subject, $body, $fromAddr) {
+  $smtpHost = getenv('SMTP_HOST'); // if set, we use SMTP
+  if ($smtpHost) {
+    // lazy-load PHPMailer classes that you copied to /opt/PHPMailer
+    $base = '/opt/PHPMailer/src';
+    if (file_exists("$base/PHPMailer.php")) {
+      require_once "$base/PHPMailer.php";
+      require_once "$base/SMTP.php";
+      require_once "$base/Exception.php";
+      // Namespace
+      $PHPMailer = 'PHPMailer\\PHPMailer\\PHPMailer';
+      $SMTP      = 'PHPMailer\\PHPMailer\\SMTP';
+      $Exception = 'PHPMailer\\PHPMailer\\Exception';
+      try {
+        $mail = new $PHPMailer(true);
+        $mail->isSMTP();
+        $mail->Host       = $smtpHost;
+        $mail->Port       = (int)(getenv('SMTP_PORT') ?: 587);
+        $mail->SMTPAuth   = (getenv('SMTP_AUTH') !== 'false'); // default true
+        $mail->Username   = getenv('SMTP_USER') ?: '';
+        $mail->Password   = getenv('SMTP_PASS') ?: '';
+        $secure           = strtolower(getenv('SMTP_SECURE') ?: 'tls'); // tls|ssl|none
+        if ($secure === 'ssl')      { $mail->SMTPSecure = 'ssl'; }
+        elseif ($secure === 'tls')  { $mail->SMTPSecure = 'tls'; }
+        else                        { $mail->SMTPSecure = false; }
+
+        $from = getenv('SMTP_FROM') ?: $fromAddr;
+        $mail->setFrom($from);
+        $mail->addAddress($to);
+        $mail->Subject = $subject;
+        $mail->Body    = $body;
+        $mail->AltBody = $body;
+        $mail->send();
+        return true;
+      } catch (\Throwable $e) {
+        error_log('[mtls] SMTP send failed: ' . $e->getMessage());
+        return false;
+      }
+    } else {
+      error_log('[mtls] PHPMailer not found at /opt/PHPMailer/src, falling back to mail()');
+    }
+  }
+
+  // Fallback: PHP mail() (will only work if container has a sendmail)
+  $headers = "From: {$fromAddr}\r\nContent-Type: text/plain; charset=UTF-8";
+  return @mail($to, $subject, $body, $headers);
+}
+
 function json_fail($msg, $code=400) {
   http_response_code($code);
   echo json_encode(array('ok'=>false,'error'=>$msg));
@@ -102,14 +151,16 @@ if ($action === 'send_code') {
   $fname = $CODES . '/' . hash('sha256', $uid . '|' . session_id()) . '.json';
   file_put_contents($fname, json_encode($rec), LOCK_EX);
 
-  // Send the email (basic mail(); replace if you have a mailer helper)
   $subj = 'Your one-time code';
   $msg  = "Your verification code is: {$code}\nThis code expires in 5 minutes.\nIf you did not request this, ignore this message.";
-  $hdrs = "From: {$MAIL_FROM}\r\nContent-Type: text/plain; charset=UTF-8";
-  @mail($email, $subj, $msg, $hdrs);
-
-  // Log
-  file_put_contents($LOGS . '/events.log', json_encode(array('evt'=>'code_sent','uid'=>$uid,'t'=>time())) . "\n", FILE_APPEND);
+  
+  $sent = mtls_send_mail($email, $subj, $msg, $MAIL_FROM);
+  if (!$sent) {
+    // Don’t leak details—just say it failed. Check container logs for why.
+    json_fail('Failed to send verification email', 500);
+  }
+  
+  file_put_contents($LOGS . '/events.log', json_encode(['evt'=>'code_sent','uid'=>$uid,'t'=>time()]) . "\n", FILE_APPEND);
   json_ok();
 }
 
