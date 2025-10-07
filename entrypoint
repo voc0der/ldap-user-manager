@@ -6,7 +6,7 @@ php_dir="/opt/ldap_user_manager"
 
 # Function to handle environment variable _FILE replacements
 env_file_replace() {
-  for env_file in $(env|grep _FILE=); do
+  for env_file in $(env | grep _FILE= || true); do
     read -a env <<< "$(echo "$env_file" | sed 's/\(.*\)_FILE=\(.*\)/\1 \2/')"
     if [ -s "${env[1]}" ]; then
       echo Setting "${env[0]}" from "${env[1]}"
@@ -21,7 +21,7 @@ env_file_replace() {
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
-# Create a group and user if they don't already exist
+# Create a group and user if they don't already exist (using PUID/PGID)
 if ! getent group appgroup >/dev/null; then
   groupadd -g "${PGID}" appgroup
 fi
@@ -36,7 +36,15 @@ else
   echo "$php_dir is read-only, skipping chown operation"
 fi
 
-# Export environment variables for Apache
+# >>> NEW: ensure mTLS state dirs exist and are owned by appuser:appgroup
+MTLS_DATA_BASE="${MTLS_DATA_BASE:-/opt/ldap_user_manager/data/mtls}"
+install -d -m 0770 "${MTLS_DATA_BASE}/codes" "${MTLS_DATA_BASE}/tokens" "${MTLS_DATA_BASE}/logs"
+chown -R appuser:appgroup "${MTLS_DATA_BASE}"
+# keep group sticky bit so new files inherit group
+find "${MTLS_DATA_BASE}" -type d -exec chmod g+s {} \; 2>/dev/null || true
+# <<<
+
+# Export environment variables for Apache (drop privileges to appuser/appgroup)
 export APACHE_RUN_USER=appuser
 export APACHE_RUN_GROUP=appgroup
 
@@ -59,7 +67,7 @@ env_file_replace
 
 # First arg is `-f` or `--some-option`
 if [ "${1#-}" != "$1" ]; then
-        set -- apache2-foreground "$@"
+  set -- apache2-foreground "$@"
 fi
 
 # Execute the command directly
