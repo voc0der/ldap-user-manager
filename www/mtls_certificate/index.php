@@ -66,7 +66,7 @@ render_header("mTLS Certificate");
   </div>
 
   <div class="panel panel-default">
-    <div class="panel-heading">3. Download</div>
+    <div class="panel-heading text-center">3. Download</div>
     <div class="panel-body">
       <div id="dl-area" class="text-muted">No token yet.</div>
       <div id="expiry-hint" class="help-block" style="margin-top:10px;"></div>
