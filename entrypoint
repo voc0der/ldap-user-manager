@@ -21,32 +21,61 @@ env_file_replace() {
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
-# Create a group and user if they don't already exist (using PUID/PGID)
-if ! getent group appgroup >/dev/null; then
-  groupadd -g "${PGID}" appgroup
-fi
-if ! id -u appuser >/dev/null 2>&1; then
-  useradd -u "${PUID}" -g appgroup -m appuser
+IS_ROOT=0
+if [ "$(id -u)" -eq 0 ]; then IS_ROOT=1; fi
+
+# Create group/user and chown only when running as root
+if [ "$IS_ROOT" -eq 1 ]; then
+  if ! getent group appgroup >/dev/null; then
+    groupadd -g "${PGID}" appgroup
+  fi
+  if ! id -u appuser >/dev/null 2>&1; then
+    useradd -u "${PUID}" -g appgroup -m appuser
+  fi
+
+  # Ensure proper permissions on php_dir if writable
+  if [ -w "$php_dir" ]; then
+    chown -R appuser:appgroup "$php_dir"
+  else
+    echo "$php_dir is read-only, skipping chown operation"
+  fi
 fi
 
-# Ensure proper permissions on php_dir if writable
-if [ -w "$php_dir" ]; then
-  chown -R appuser:appgroup "$php_dir"
-else
-  echo "$php_dir is read-only, skipping chown operation"
-fi
-
-# >>> NEW: ensure mTLS state dirs exist and are owned by appuser:appgroup
+# Ensure mTLS state dirs exist
 MTLS_DATA_BASE="${MTLS_DATA_BASE:-/opt/ldap_user_manager/data/mtls}"
-install -d -m 0770 "${MTLS_DATA_BASE}/codes" "${MTLS_DATA_BASE}/tokens" "${MTLS_DATA_BASE}/logs"
-chown -R appuser:appgroup "${MTLS_DATA_BASE}"
-# keep group sticky bit so new files inherit group
-find "${MTLS_DATA_BASE}" -type d -exec chmod g+s {} \; 2>/dev/null || true
-# <<<
+mkdir -p "${MTLS_DATA_BASE}/codes" "${MTLS_DATA_BASE}/tokens" "${MTLS_DATA_BASE}/logs" || true
 
-# Export environment variables for Apache (drop privileges to appuser/appgroup)
-export APACHE_RUN_USER=appuser
-export APACHE_RUN_GROUP=appgroup
+# If we're root, fix ownership; if not, at least ensure perms or fail loudly
+if [ "$IS_ROOT" -eq 1 ]; then
+  chown -R appuser:appgroup "${MTLS_DATA_BASE}" || true
+  chmod -R 0770 "${MTLS_DATA_BASE}" || true
+  find "${MTLS_DATA_BASE}" -type d -exec chmod g+s {} \; 2>/dev/null || true
+else
+  # Not root: verify we can write; if not, print a clear error and exit
+  touch "${MTLS_DATA_BASE}/.writecheck" 2>/dev/null || {
+    echo "[mtls] ERROR: ${MTLS_DATA_BASE} is not writable by uid=$(id -u) gid=$(id -g)."
+    echo "[mtls] Fix the host bind mount ownership/permissions or run the container as a user with write access."
+    exit 1
+  }
+  rm -f "${MTLS_DATA_BASE}/.writecheck" 2>/dev/null || true
+fi
+
+# Export environment variables for Apache
+# If appuser/appgroup exist use them; otherwise fall back to current uid/gid names (or numerics)
+if id -u appuser >/dev/null 2>&1; then
+  export APACHE_RUN_USER=appuser
+else
+  # try to derive a name from current uid; if none, use numeric uid
+  CU_NAME="$(id -un 2>/dev/null || true)"
+  export APACHE_RUN_USER="${CU_NAME:-$(id -u)}"
+fi
+
+if getent group appgroup >/dev/null 2>&1; then
+  export APACHE_RUN_GROUP=appgroup
+else
+  CG_NAME="$(getent group "$(id -g)" | cut -d: -f1 || true)"
+  export APACHE_RUN_GROUP="${CG_NAME:-$(id -g)}"
+fi
 
 # Set default SERVER_HOSTNAME if not provided
 if [ -z "$SERVER_HOSTNAME" ]; then
@@ -70,5 +99,4 @@ if [ "${1#-}" != "$1" ]; then
   set -- apache2-foreground "$@"
 fi
 
-# Execute the command directly
 exec "$@"
