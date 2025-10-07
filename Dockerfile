@@ -83,7 +83,7 @@ RUN set -eux; \
     install -d -m 0770 /opt/ldap_user_manager/data/mtls/codes \
                        /opt/ldap_user_manager/data/mtls/tokens \
                        /opt/ldap_user_manager/data/mtls/logs; \
-    chown -R appuser:appgroup /opt/ldap_user_manager/data/mtls
+    chown -R www-data:www-data /opt/ldap_user_manager/data/mtls
 
 # Switch to the non-root user
 USER appuser
