@@ -52,29 +52,42 @@ if [ "$IS_ROOT" -eq 1 ]; then
   find "${MTLS_DATA_BASE}" -type d -exec chmod g+s {} \; 2>/dev/null || true
 else
   # Not root: verify we can write; if not, print a clear error and exit
-  touch "${MTLS_DATA_BASE}/.writecheck" 2>/dev/null || {
+  if ! touch "${MTLS_DATA_BASE}/.writecheck" 2>/dev/null; then
     echo "[mtls] ERROR: ${MTLS_DATA_BASE} is not writable by uid=$(id -u) gid=$(id -g)."
-    echo "[mtls] Fix the host bind mount ownership/permissions or run the container as a user with write access."
+    echo "[mtls] Fix options:"
+    echo "  - Remove 'user:' so entrypoint runs as root and can chown at boot, or"
+    echo "  - Make this path writable by your runtime uid/gid inside the image, or"
+    echo "  - Grant CHOWN/FOWNER caps so non-root can adjust ownership."
     exit 1
-  }
+  fi
   rm -f "${MTLS_DATA_BASE}/.writecheck" 2>/dev/null || true
 fi
 
 # Export environment variables for Apache
-# If appuser/appgroup exist use them; otherwise fall back to current uid/gid names (or numerics)
+# Use username if it exists; else allow numeric via #UID/#GID (Apache supports this)
+RUID="$(id -u)"
+RGID="$(id -g)"
+RUSER_NAME="$(getent passwd "$RUID" | cut -d: -f1 || true)"
+RGROUP_NAME="$(getent group "$RGID" | cut -d: -f1 || true)"
+
 if id -u appuser >/dev/null 2>&1; then
   export APACHE_RUN_USER=appuser
 else
-  # try to derive a name from current uid; if none, use numeric uid
-  CU_NAME="$(id -un 2>/dev/null || true)"
-  export APACHE_RUN_USER="${CU_NAME:-$(id -u)}"
+  if [ -n "$RUSER_NAME" ]; then
+    export APACHE_RUN_USER="$RUSER_NAME"
+  else
+    export APACHE_RUN_USER="#$RUID"
+  fi
 fi
 
 if getent group appgroup >/dev/null 2>&1; then
   export APACHE_RUN_GROUP=appgroup
 else
-  CG_NAME="$(getent group "$(id -g)" | cut -d: -f1 || true)"
-  export APACHE_RUN_GROUP="${CG_NAME:-$(id -g)}"
+  if [ -n "$RGROUP_NAME" ]; then
+    export APACHE_RUN_GROUP="$RGROUP_NAME"
+  else
+    export APACHE_RUN_GROUP="#$RGID"
+  fi
 fi
 
 # Set default SERVER_HOSTNAME if not provided
