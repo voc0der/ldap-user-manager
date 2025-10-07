@@ -78,6 +78,7 @@ RUN set -eux; \
     install -d -m 0777 /opt/ldap_user_manager/data/mtls/codes \
                        /opt/ldap_user_manager/data/mtls/tokens \
                        /opt/ldap_user_manager/data/mtls/logs
+    chmod -R 0777 /opt/ldap_user_manager/data/mtls
 
 # Set the entrypoint and command
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
