@@ -20,7 +20,7 @@ $groups_list = array_filter(array_map('trim', preg_split('/[;,\s]+/', (string)$g
 $has_mtls    = in_array('mtls', $groups_list, true);
 
 if (!$uid || !$has_mtls) {
-  render_header("mTLS Certificate", false);
+  render_header("mTLS Certificate");
   echo '<div class="container" style="max-width:860px;margin-top:20px"><div class="alert alert-danger">Access denied: you must be a member of the <code>mtls</code> group.</div></div>';
   render_footer();
   exit;
@@ -31,7 +31,7 @@ if (empty($_SESSION['csrf'])) {
   $_SESSION['csrf'] = bin2hex(random_bytes(16));
 }
 
-render_header("mTLS Certificate", false);
+render_header("mTLS Certificate");
 ?>
 <div class="container" style="max-width:860px;margin-top:20px">
   <h2 class="page-header">mTLS Certificate</h2>
