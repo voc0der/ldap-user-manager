@@ -1,6 +1,4 @@
 <?php
-declare(strict_types=1);
-
 // Includes
 set_include_path(__DIR__ . '/../includes' . PATH_SEPARATOR . get_include_path());
 include_once 'web_functions.inc.php';
@@ -9,28 +7,33 @@ include_once 'web_functions.inc.php';
 header('Content-Type: application/json');
 
 // ---------- Helpers ----------
-function json_fail(string $msg, int $code=400) {
+function json_fail($msg, $code=400) {
   http_response_code($code);
-  echo json_encode(['ok'=>false,'error'=>$msg]);
+  echo json_encode(array('ok'=>false,'error'=>$msg));
   exit;
 }
-function json_ok(array $o=[]) {
-  echo json_encode(['ok'=>true] + $o);
+function json_ok($o=array()) {
+  echo json_encode(array('ok'=>true) + $o);
   exit;
 }
-function h(string $k): ?string {
+function h($k) {
   $k = 'HTTP_' . strtoupper(str_replace('-', '_', $k));
   return isset($_SERVER[$k]) ? trim((string)$_SERVER[$k]) : null;
 }
 // Simple file-based rate limiter (sliding window)
-function rate_key(string $uid, string $kind): string { return hash('sha256', $uid . '|' . $kind); }
-function rate_allow(string $dir, string $key, int $limit, int $perSeconds): bool {
+function rate_key($uid, $kind) { return hash('sha256', $uid . '|' . $kind); }
+function rate_allow($dir, $key, $limit, $perSeconds) {
   $f = $dir . '/rate_' . $key . '.json';
   $now = time();
   $winStart = $now - $perSeconds;
-  $arr = [];
-  if (file_exists($f)) { $arr = json_decode((string)file_get_contents($f), true) ?: []; }
-  $arr = array_values(array_filter($arr, fn($t) => (int)$t >= $winStart));
+  $arr = array();
+  if (file_exists($f)) { $tmp = json_decode((string)file_get_contents($f), true); if (is_array($tmp)) $arr = $tmp; }
+
+  // remove old timestamps (no arrow fn; use closure)
+  $arr = array_values(array_filter($arr, function($t) use ($winStart) {
+    return (int)$t >= $winStart;
+  }));
+
   if (count($arr) >= $limit) return false;
   $arr[] = $now;
   file_put_contents($f, json_encode($arr), LOCK_EX);
@@ -38,22 +41,24 @@ function rate_allow(string $dir, string $key, int $limit, int $perSeconds): bool
 }
 
 // ---------- CSRF ----------
-$Body = json_decode(file_get_contents('php://input'), true) ?? [];
+$Body = json_decode(file_get_contents('php://input'), true);
+if (!is_array($Body)) $Body = array();
 if (empty($_SESSION['csrf']) || empty($Body['csrf']) || !hash_equals($_SESSION['csrf'], (string)$Body['csrf'])) {
   json_fail('CSRF check failed', 403);
 }
 
 // ---------- Identity (proxy headers only) ----------
-$uid    = h('Remote-User')   ?: ($_SESSION['uid'] ?? null);
-$email  = h('Remote-Email')  ?: ($_SESSION['email'] ?? null);
-$groups = preg_split('/[;,\s]+/', (string)(h('Remote-Groups') ?? ''), -1, PREG_SPLIT_NO_EMPTY);
-$groups = array_map('trim', $groups);
+$uid    = h('Remote-User');   if (!$uid && isset($_SESSION['uid']))   $uid = $_SESSION['uid'];
+$email  = h('Remote-Email');  if (!$email && isset($_SESSION['email'])) $email = $_SESSION['email'];
+$groups_raw = (string)(h('Remote-Groups') ? h('Remote-Groups') : '');
+$groups = preg_split('/[;,\s]+/', $groups_raw, -1, PREG_SPLIT_NO_EMPTY);
+$groups = array_map('trim', is_array($groups)?$groups:array());
 
 if (!$uid) json_fail('Not authenticated', 401);
 if (!in_array('mtls', $groups, true)) json_fail('Not in mtls group', 403);
 
 // ---------- Storage paths ----------
-$APP_ROOT = dirname(__DIR__, 1);           // /opt/ldap_user_manager
+$APP_ROOT = dirname(__DIR__, 1);           // e.g. /opt/ldap_user_manager
 $DATA     = $APP_ROOT . '/data/mtls';
 $CODES    = $DATA . '/codes';
 $TOKENS   = $DATA . '/tokens';
@@ -72,7 +77,7 @@ $CERT_BASE      = getenv('MTLS_CERT_BASE') ?: '/mnt/mtls-certs';
 $P12_PASS       = getenv('MTLS_P12_PASS') ?: '';
 
 // ---------- Actions ----------
-$action = $_GET['action'] ?? '';
+$action = isset($_GET['action']) ? $_GET['action'] : '';
 
 if ($action === 'send_code') {
   if (!$email) json_fail('No email associated with this account', 400);
@@ -81,19 +86,19 @@ if ($action === 'send_code') {
     json_fail('Too many code requests, try later', 429);
   }
 
-  $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+  $code = str_pad((string)mt_rand(0, 999999), 6, '0', STR_PAD_LEFT);
   $hash = password_hash($code, PASSWORD_DEFAULT);
 
-  $rec = [
+  $rec = array(
     'uid'      => $uid,
     'hash'     => $hash,
-    'ip'       => ($_SERVER['REMOTE_ADDR'] ?? ''),
-    'ua'       => ($_SERVER['HTTP_USER_AGENT'] ?? ''),
+    'ip'       => (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : ''),
+    'ua'       => (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''),
     'ts'       => time(),
     'exp'      => time() + $CODE_TTL_SEC,
     'attempts' => 0,
     'session'  => session_id(),
-  ];
+  );
   $fname = $CODES . '/' . hash('sha256', $uid . '|' . session_id()) . '.json';
   file_put_contents($fname, json_encode($rec), LOCK_EX);
 
@@ -104,22 +109,23 @@ if ($action === 'send_code') {
   @mail($email, $subj, $msg, $hdrs);
 
   // Log
-  file_put_contents($LOGS . '/events.log', json_encode(['evt'=>'code_sent','uid'=>$uid,'t'=>time()]) . "\n", FILE_APPEND);
+  file_put_contents($LOGS . '/events.log', json_encode(array('evt'=>'code_sent','uid'=>$uid,'t'=>time())) . "\n", FILE_APPEND);
   json_ok();
 }
 
 if ($action === 'verify_code') {
-  $code = (string)($Body['code'] ?? '');
+  $code = isset($Body['code']) ? (string)$Body['code'] : '';
   if (!preg_match('/^\d{4,8}$/', $code)) json_fail('Invalid code format');
 
   $fname = $CODES . '/' . hash('sha256', $uid . '|' . session_id()) . '.json';
   if (!file_exists($fname)) json_fail('No active code', 400);
-  $rec = json_decode((string)file_get_contents($fname), true) ?: null;
-  if (!$rec) json_fail('Code record parse error', 400);
-  if (($rec['exp'] ?? 0) < time()) { @unlink($fname); json_fail('Code expired', 400); }
-  if (($rec['attempts'] ?? 0) >= 5) { @unlink($fname); json_fail('Too many attempts', 429); }
+  $rec_raw = (string)file_get_contents($fname);
+  $rec = json_decode($rec_raw, true);
+  if (!is_array($rec)) json_fail('Code record parse error', 400);
+  if ((isset($rec['exp']) ? $rec['exp'] : 0) < time()) { @unlink($fname); json_fail('Code expired', 400); }
+  if ((isset($rec['attempts']) ? $rec['attempts'] : 0) >= 5) { @unlink($fname); json_fail('Too many attempts', 429); }
 
-  $rec['attempts'] = (int)($rec['attempts'] ?? 0) + 1;
+  $rec['attempts'] = (int)((isset($rec['attempts']) ? $rec['attempts'] : 0) + 1);
   file_put_contents($fname, json_encode($rec), LOCK_EX);
 
   if (!password_verify($code, $rec['hash'])) json_fail('Incorrect code', 400);
@@ -127,15 +133,15 @@ if ($action === 'verify_code') {
   // Code is valid → remove challenge and mint a single-use token
   @unlink($fname);
 
-  $token = bin2hex(random_bytes(24));
-  $tokRec = [
+  $token = bin2hex(openssl_random_pseudo_bytes(24));
+  $tokRec = array(
     'uid'     => $uid,
     'issued'  => time(),
     'exp'     => time() + $TOKEN_TTL_SEC,
     'used'    => false,
-    'ip'      => ($_SERVER['REMOTE_ADDR'] ?? ''),
+    'ip'      => (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : ''),
     'session' => session_id(),
-  ];
+  );
   $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
   file_put_contents($tfile, json_encode($tokRec), LOCK_EX);
 
@@ -155,7 +161,7 @@ if ($action === 'verify_code') {
     }
   } elseif (is_file($p12_path) && $P12_PASS !== '') {
     $p12 = @file_get_contents($p12_path);
-    $out = [];
+    $out = array();
     if ($p12 !== false && @openssl_pkcs12_read($p12, $out, $P12_PASS)) {
       if (!empty($out['cert'])) {
         $x = @openssl_x509_parse($out['cert']);
@@ -173,7 +179,7 @@ if ($action === 'verify_code') {
     @exec($cmd);
   }
 
-  json_ok(['token'=>$token, 'expires_days'=>$expires_days]);
+  json_ok(array('token'=>$token, 'expires_days'=>$expires_days));
 }
 
 // Unknown action
