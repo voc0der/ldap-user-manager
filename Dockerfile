@@ -1,17 +1,20 @@
 FROM php:8-apache
 
-# ---- OS deps ----
+# Install required packages as root
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         libldb-dev libldap2-dev libldap-common \
-        libfreetype6-dev libjpeg62-turbo-dev libpng-dev \
-        dpkg-dev gosu ca-certificates curl; \
+        libfreetype6-dev \
+        libjpeg62-turbo-dev \
+        libpng-dev \
+        dpkg-dev \
+        gosu && \
     rm -rf /var/lib/apt/lists/*
 
-# ---- PHP extensions ----
-# gd: enable freetype + jpeg explicitly
-# ldap: use correct multiarch libdir
+# Configure and install PHP extensions
+# - gd: enable freetype + jpeg explicitly
+# - ldap: use correct multiarch libdir (fixes "invalid host type: lib/x86_64-linux-gnu.2")
 RUN set -eux; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
     docker-php-ext-install -j"$(nproc)" gd; \
@@ -19,56 +22,55 @@ RUN set -eux; \
     docker-php-ext-configure ldap --with-libdir="lib/${multiarch}"; \
     docker-php-ext-install -j"$(nproc)" ldap
 
-# (openssl is enabled by default in php:8-apache)
-
-# ---- PHPMailer (if you still want it available system-wide) ----
+# Add PHPMailer archive and extract
 ADD https://github.com/PHPMailer/PHPMailer/archive/refs/tags/v6.3.0.tar.gz /tmp
 RUN tar -xzf /tmp/v6.3.0.tar.gz -C /opt && mv /opt/PHPMailer-6.3.0 /opt/PHPMailer
 
-# ---- Apache mods ----
-# We'll use mod_headers for extra hardening if desired.
-RUN a2enmod rewrite ssl headers && a2dissite 000-default default-ssl
+# Enable Apache modules
+RUN a2enmod rewrite ssl && a2dissite 000-default default-ssl
 
-# ---- Apache vhost ----
+# Pre-bake Apache configuration
 ENV SERVER_CERT_FILENAME=/ldap-user-manager/cert.crt
 ENV SERVER_KEY_FILENAME=/ldap-user-manager/privkey.pem
 ARG LDAP_SERVER_NAME=localhost
-RUN echo "ServerName ${LDAP_SERVER_NAME}" >> /etc/apache2/apache2.conf && \
-    printf "%s\n" "<VirtualHost *:80>
-      ServerName ${LDAP_SERVER_NAME}
-      Redirect permanent / https://${LDAP_SERVER_NAME}/
-    </VirtualHost>" > /etc/apache2/sites-enabled/redirect.conf && \
-    printf "%s\n" "<VirtualHost *:443>
-      ServerName ${LDAP_SERVER_NAME}
-      DocumentRoot /opt/ldap_user_manager
-      <Directory /opt/ldap_user_manager>
-        AllowOverride All
-        Require all granted
-        # Optional: strip any spoofed client-sent X-* before your proxy sets them
-        # Header unset X-Forwarded-User
-        # Header unset Remote-User
-        # Header unset Remote-Email
-        # Header unset Remote-Groups
-      </Directory>
-      SSLEngine On
-      SSLCertificateFile /opt/ssl/${SERVER_CERT_FILENAME}
-      SSLCertificateKeyFile /opt/ssl/${SERVER_KEY_FILENAME}
-    </VirtualHost>" > /etc/apache2/sites-enabled/lum.conf
+RUN set -eux; \
+    echo "ServerName ${LDAP_SERVER_NAME}" >> /etc/apache2/apache2.conf; \
+    { \
+      echo "<VirtualHost *:80>"; \
+      echo "  ServerName ${LDAP_SERVER_NAME}"; \
+      echo "  Redirect permanent / https://${LDAP_SERVER_NAME}/"; \
+      echo "</VirtualHost>"; \
+    } > /etc/apache2/sites-enabled/redirect.conf; \
+    { \
+      echo "<VirtualHost *:443>"; \
+      echo "  ServerName ${LDAP_SERVER_NAME}"; \
+      echo "  DocumentRoot /opt/ldap_user_manager"; \
+      echo "  <Directory /opt/ldap_user_manager>"; \
+      echo "    Require all granted"; \
+      echo "  </Directory>"; \
+      echo "  SSLEngine On"; \
+      echo "  SSLCertificateFile /opt/ssl/${SERVER_CERT_FILENAME}"; \
+      echo "  SSLCertificateKeyFile /opt/ssl/${SERVER_KEY_FILENAME}"; \
+      echo "</VirtualHost>"; \
+    } > /etc/apache2/sites-enabled/lum.conf
 
-# ---- App files ----
+# Expose ports
+EXPOSE 80
+EXPOSE 443
+
+# Copy application files
 COPY www/ /opt/ldap_user_manager
 
-# ---- Defaults for the mTLS feature ----
-# You can override these in docker-compose/environment.
-ENV MTLS_DATA_BASE=/opt/ldap_user_manager/data/mtls
-ENV MTLS_CERT_BASE=/mnt/mtls-certs
-# Only needed if you want expiry parsed from .p12 instead of a PEM:
-ENV MTLS_P12_PASS=
-ENV MTLS_MAIL_FROM=no-reply@localhost
-# Optional Apprise endpoint:
-ENV APPRISE_URL=
+# Add and set permissions for the entrypoint script
+COPY entrypoint /usr/local/bin/entrypoint
+RUN chmod a+x /usr/local/bin/entrypoint
 
-# ---- Create app user/group and set ownership ----
+# Set up /etc/ldap/ldap.conf during build to avoid runtime changes
+ARG LDAP_TLS_CACERT=ca.crt
+RUN mkdir -p /etc/ldap && \
+    echo "TLS_CACERT /opt/ssl/${LDAP_TLS_CACERT}" > /etc/ldap/ldap.conf
+
+# Set up user and group with PUID and PGID
 ARG PUID=1000
 ARG PGID=1000
 RUN groupadd -g ${PGID} appgroup && \
@@ -76,26 +78,16 @@ RUN groupadd -g ${PGID} appgroup && \
     mkdir -p /home/appuser && \
     chown -R appuser:appgroup /home/appuser /opt/ldap_user_manager
 
-# Create default dirs in the image (nice for local run without bind-mounts)
+# Create mTLS state directories (codes/tokens/logs) with correct perms
 RUN set -eux; \
     install -d -m 0770 /opt/ldap_user_manager/data/mtls/codes \
                        /opt/ldap_user_manager/data/mtls/tokens \
-                       /opt/ldap_user_manager/data/mtls/logs \
-                       /mnt/mtls-certs; \
-    chown -R appuser:appgroup /opt/ldap_user_manager/data/mtls /mnt/mtls-certs
+                       /opt/ldap_user_manager/data/mtls/logs; \
+    chown -R appuser:appgroup /opt/ldap_user_manager/data/mtls
 
-# ---- Entry point ensures dirs exist even with bind mounts ----
-COPY entrypoint /usr/local/bin/entrypoint
-RUN chmod a+x /usr/local/bin/entrypoint
-
-# ---- LDAP CA (optional) ----
-ARG LDAP_TLS_CACERT=ca.crt
-RUN mkdir -p /etc/ldap && \
-    echo "TLS_CACERT /opt/ssl/${LDAP_TLS_CACERT}" > /etc/ldap/ldap.conf
-
-# ---- Switch to non-root ----
+# Switch to the non-root user
 USER appuser
 
-EXPOSE 80 443
+# Set the entrypoint and command
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
 CMD ["apache2-foreground"]
