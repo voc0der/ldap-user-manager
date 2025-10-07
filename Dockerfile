@@ -75,7 +75,7 @@ RUN mkdir -p /etc/ldap && \
 
 # Create mTLS state directories (codes/tokens/logs); ownership fixed at runtime in entrypoint
 RUN set -eux; \
-    install -d -m 0770 /opt/ldap_user_manager/data/mtls/codes \
+    install -d -m 0777 /opt/ldap_user_manager/data/mtls/codes \
                        /opt/ldap_user_manager/data/mtls/tokens \
                        /opt/ldap_user_manager/data/mtls/logs
 
