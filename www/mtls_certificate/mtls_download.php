@@ -15,9 +15,10 @@ if (!$uid || !in_array('mtls', array_map('trim',$groups), true)) hard_fail(403, 
 $token = isset($_GET['token']) ? (string)$_GET['token'] : '';
 if (!preg_match('/^[a-f0-9]{48}$/', $token)) hard_fail(400, 'Bad token');
 
-$DATA = dirname(__DIR__) . '/../data/mtls';
-$TOKENS = $DATA . '/tokens';
-$LOGS = $DATA . '/logs';
+$APP_ROOT = realpath(dirname(__DIR__, 2));
+$DATA     = $APP_ROOT . '/data/mtls';
+$TOKENS   = $DATA . '/tokens';
+$LOGS     = $DATA . '/logs';
 $APPRISE_URL = getenv('APPRISE_URL');
 
 $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
