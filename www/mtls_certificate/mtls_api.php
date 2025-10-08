@@ -16,33 +16,81 @@ function mtls_last_mail_error(): string {
 // Required to use SMTP:  SMTP_HOSTNAME
 // Common vars you already use: SMTP_HOST_PORT, SMTP_USERNAME, SMTP_PASSWORD_FILE (entrypoint sets SMTP_PASSWORD)
 // Optional: SMTP_PASSWORD, SMTP_ENCRYPTION (tls|ssl|none), SMTP_AUTOTLS (true|false), EMAIL_FROM_ADDRESS (preferred from)
+// Resolve a reasonable app/site display name, mirroring the rest of the app.
+function mtls_app_display_name(): string {
+  static $name = null;
+  if ($name !== null) return $name;
+
+  // Prefer existing app helpers/constants if your app defines them.
+  foreach (['get_site_name','site_name','app_name','appTitle','siteTitle'] as $fn) {
+    if (function_exists($fn)) {
+      $n = trim((string)@$fn());
+      if ($n !== '') return $name = $n;
+    }
+  }
+  foreach (['APP_NAME','SITE_NAME','WEB_TITLE','LUM_TITLE'] as $g) {
+    if (!empty($GLOBALS[$g])) return $name = trim((string)$GLOBALS[$g]);
+  }
+  // Environment fallbacks (some stacks set these globally).
+  foreach (['APP_NAME','SITE_NAME','WEB_TITLE'] as $ek) {
+    $n = getenv($ek);
+    if ($n) return $name = trim($n);
+  }
+  // Derive something sensible from host if nothing else exists.
+  $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? '';
+  if ($host) {
+    $host = preg_replace('/:\d+$/', '', $host);
+    $host = preg_replace('/^www\./i', '', $host);
+    $base = ucfirst(explode('.', $host)[0]);
+    return $name = $base;
+  }
+  return $name = 'LDAP';
+}
+
+// --- MAILER wired to your env (PHPMailer SMTP), using "<APP> User Manager <addr>" ---
 function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
   $GLOBALS['__MTLS_MAIL_ERR'] = '';
 
-  // Your envs
+  // SMTP basics
   $host = getenv('SMTP_HOSTNAME') ?: '';
   $port = (int)(getenv('SMTP_HOST_PORT') ?: 587);
   $user = getenv('SMTP_USERNAME') ?: '';
-  $pass = getenv('SMTP_PASSWORD') ?: ''; // entrypoint may set from SMTP_PASSWORD_FILE
-  $from = getenv('EMAIL_FROM_ADDRESS') ?: ($fallbackFrom ?: ($user ?: 'no-reply@localhost'));
+  $pass = getenv('SMTP_PASSWORD') ?: '';
 
-  // TLS mapping: prefer boolean SMTP_USE_TLS, else fallback to SMTP_ENCRYPTION, default tls
+  // Address & display name (follow app style)
+  $fromAddr = getenv('MTLS_MAIL_FROM')
+           ?: getenv('SMTP_FROM')
+           ?: getenv('EMAIL_FROM_ADDRESS')
+           ?: ($fallbackFrom ?: ($user ?: 'no-reply@localhost'));
+
+  // If someone supplied "Name <addr>" as an env, split it cleanly
+  if (preg_match('/^\s*([^<]+?)\s*<\s*([^>]+)\s*>\s*$/', $fromAddr, $m)) {
+    $fromAddr = trim($m[2]);
+    // ignore embedded name; we build it below for consistency
+  }
+
+  $baseName = mtls_app_display_name();
+  // Avoid duplicating "User Manager"
+  $suffix = preg_match('/user manager$/i', $baseName) ? '' : ' User Manager';
+  $fromName = trim($baseName . $suffix);
+
+  // Optional envelope sender (Return-Path)
+  $sender = getenv('MTLS_MAIL_SENDER') ?: '';
+
+  // TLS selection (matches your earlier logic)
   $enc = 'tls';
   $use_tls = getenv('SMTP_USE_TLS');
   if ($use_tls !== false && $use_tls !== '') {
     $enc = (strtolower(trim($use_tls)) === 'true' || trim($use_tls) === '1') ? 'tls' : 'none';
   } else {
-    $enc = strtolower(getenv('SMTP_ENCRYPTION') ?: 'tls');  // optional
+    $enc = strtolower(getenv('SMTP_ENCRYPTION') ?: 'tls');
   }
   $autotls = ($enc === 'tls');
 
-  // Quick socket probe for logs
-  $errno = 0; $errstr = '';
-  if ($host && !@fsockopen($host, $port, $errno, $errstr, 5)) {
-    error_log("[mtls] SMTP connect probe failed to {$host}:{$port} - {$errno} {$errstr}");
-  }
+  // Probe socket (optional)
+  if ($host) { @fsockopen($host, $port, $errno, $errstr, 5); }
 
-  // Load PHPMailer if present
+  // Try PHPMailer first (same pathing you use elsewhere)
   $base = '/opt/PHPMailer/src';
   $havePHPMailer = false;
   if (is_file("$base/PHPMailer.php")) {
@@ -65,19 +113,17 @@ function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
       $mail->Host = $host;
       $mail->Port = $port;
 
-      // TLS/SSL/none handling
       if ($enc === 'ssl' || $port === 465) {
         $mail->SMTPSecure  = 'ssl';
         $mail->SMTPAutoTLS = false;
       } elseif ($enc === 'tls') {
         $mail->SMTPSecure  = 'tls';
         $mail->SMTPAutoTLS = $autotls;
-      } else { // none
+      } else {
         $mail->SMTPSecure  = false;
         $mail->SMTPAutoTLS = false;
       }
 
-      // Auth if provided
       if ($user !== '' || $pass !== '') {
         $mail->SMTPAuth = true;
         $mail->Username = $user;
@@ -86,7 +132,6 @@ function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
         $mail->SMTPAuth = false;
       }
 
-      // Optional relax for self-signed
       if (strtolower(getenv('SMTP_ALLOW_SELF_SIGNED') ?: 'false') === 'true') {
         $mail->SMTPOptions = [
           'ssl' => [
@@ -96,21 +141,19 @@ function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
           ],
         ];
       }
-
-      // Optional CA bundle
       $caf = getenv('SMTP_CA_FILE');
       if ($caf && is_readable($caf)) {
         $mail->SMTPOptions = $mail->SMTPOptions ?: [];
         $mail->SMTPOptions['ssl']['cafile'] = $caf;
       }
-
-      // Optional debug
       if (strtolower(getenv('SMTP_DEBUG') ?: 'false') === 'true') {
         $mail->SMTPDebug = 2;
         $mail->Debugoutput = function($str, $lvl) { error_log('[mtls] SMTP: ' . $str); };
       }
 
-      $mail->setFrom($from);
+      $mail->setFrom($fromAddr, $fromName);
+      if ($sender) $mail->Sender = $sender;
+
       $mail->addAddress($to);
       $mail->Subject = $subject;
       $mail->Body    = $body;
@@ -124,8 +167,13 @@ function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
     }
   }
 
-  // PHPMailer not present → fall back to mail()
-  $headers = "From: {$from}\r\nContent-Type: text/plain; charset=UTF-8";
+  // Fallback: mail()
+  $fromHeaderName = $fromName;
+  if (function_exists('mb_encode_mimeheader')) {
+    $fromHeaderName = mb_encode_mimeheader($fromHeaderName, 'UTF-8');
+  }
+  $headers = "From: {$fromHeaderName} <{$fromAddr}>\r\nContent-Type: text/plain; charset=UTF-8";
+  if ($sender) $headers .= "\r\nReturn-Path: {$sender}";
   $ok = @mail($to, $subject, $body, $headers);
   if (!$ok) $GLOBALS['__MTLS_MAIL_ERR'] = 'mail() failed (no local MTA?)';
   return $ok;
