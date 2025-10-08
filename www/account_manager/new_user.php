@@ -1,5 +1,5 @@
 <?php
-// www/account_manager/new_user.php
+// www/account_manager/new_user.php  (modernized styling only)
 
 set_include_path(".:" . __DIR__ . "/../includes/");
 
@@ -109,7 +109,7 @@ if (isset($_GET['account_request'])) {
   $mail[0] = filter_var($_GET['email'], FILTER_SANITIZE_EMAIL);
   if ($mail[0] == "") {
     if (isset($EMAIL_DOMAIN)) {
-      $mail[0] = $uid . "@" . $EMAIL_DOMAIN;
+      $mail[0] = $uid . "@" . $EMAIL_DOMAIN;   // (kept as-is per your original logic)
       $disabled_email_tickbox = FALSE;
     }
   } else {
@@ -158,7 +158,6 @@ if (isset($_POST['create_account'])) {
   if ($ENFORCE_SAFE_SYSTEM_NAMES == TRUE && !preg_match("/$USERNAME_REGEX/", $account_identifier)) { $invalid_account_identifier = TRUE; }
 
   // ---- Length-only password policy
-  // New users typically don't have MFA yet => require NO_MFA_MIN_LEN.
   $min_len = ($admin_setup ? max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN) : NO_MFA_MIN_LEN);
   $len = pw_len($password);
   if ($len < $min_len) { $too_short = TRUE; }
@@ -315,79 +314,98 @@ document.addEventListener('DOMContentLoaded', function(){
 });
 </script>
 
-<div class="container">
-  <div class="col-sm-8 col-md-offset-2">
+<style>
+/* ---------- modern chrome (Bootstrap 3 friendly) ---------- */
+.wrap-narrow { max-width: 980px; margin: 22px auto 40px; }
+.panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
+.panel-modern .panel-heading {
+  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+  color:#cfe9ff; font-weight:600; letter-spacing:.4px; text-transform:uppercase;
+  padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.08);
+}
+.panel-modern .panel-body { padding:16px 16px 18px; }
+.help-min { color:#8aa0b2; font-size:12px; }
+.btn-pill { border-radius:999px; }
+.btn-soft { background:#121820; border:1px solid rgba(255,255,255,.12); color:#cfe9ff; }
+.btn-soft:hover { background:#17202b; }
+.progress-modern { height:18px; background:#0e151d; border:1px solid rgba(255,255,255,.08); border-radius:10px; }
+.progress-modern .progress-bar { line-height:16px; font-size:12px; }
+</style>
 
-    <div class="panel panel-default">
-      <div class="panel-heading text-center"><?php print $page_title; ?></div>
-      <div class="panel-body text-center">
+<div class="container wrap-narrow">
+  <div class="panel panel-modern">
+    <div class="panel-heading text-center"><?php print $page_title; ?></div>
+    <div class="panel-body">
 
-        <form class="form-horizontal" action="" enctype="multipart/form-data" method="post">
-          <?php if ($admin_setup == TRUE) { ?><input type="hidden" name="setup_admin_account" value="true"><?php } ?>
-          <input type="hidden" name="create_account">
+      <form class="form-horizontal" action="" enctype="multipart/form-data" method="post">
+        <?php if ($admin_setup == TRUE) { ?><input type="hidden" name="setup_admin_account" value="true"><?php } ?>
+        <input type="hidden" name="create_account">
 
-          <?php
-            foreach ($attribute_map as $attribute => $attr_r) {
-              $label = $attr_r['label'];
-              $onkeyup = isset($attr_r['onkeyup']) ? $attr_r['onkeyup'] : "";
-              if ($attribute == $LDAP['account_attribute']) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
-              if (isset($attr_r['required']) && $attr_r['required'] == TRUE) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
-              $these_values = isset($$attribute) ? $$attribute : array();
-              $inputtype = isset($attr_r['inputtype']) ? $attr_r['inputtype'] : "";
-              render_attribute_fields($attribute,$label,$these_values,"",$onkeyup,$inputtype,$tabindex);
-              $tabindex++;
-            }
-          ?>
+        <?php
+          foreach ($attribute_map as $attribute => $attr_r) {
+            $label = $attr_r['label'];
+            $onkeyup = isset($attr_r['onkeyup']) ? $attr_r['onkeyup'] : "";
+            if ($attribute == $LDAP['account_attribute']) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
+            if (isset($attr_r['required']) && $attr_r['required'] == TRUE) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
+            $these_values = isset($$attribute) ? $$attribute : array();
+            $inputtype = isset($attr_r['inputtype']) ? $attr_r['inputtype'] : "";
+            render_attribute_fields($attribute,$label,$these_values,"",$onkeyup,$inputtype,$tabindex);
+            $tabindex++;
+          }
+        ?>
 
-          <div class="form-group" id="password_div">
-            <label for="password" class="col-sm-3 control-label">Password</label>
-            <div class="col-sm-6">
-              <input tabindex="<?php print $tabindex+1; ?>" type="password" class="form-control" id="password" name="password"
-                     maxlength="<?php echo (int)MAX_LEN; ?>"
-                     oninput="updateMeter(<?php echo (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN); ?>); check_passwords_match();">
-              <div class="help-block text-left" style="margin-top:6px;">
-                Policy: minimum <strong><?php echo (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN); ?></strong> characters for new accounts; maximum <strong><?php echo (int)MAX_LEN; ?></strong>. No composition rules.
-              </div>
-            </div>
-            <div class="col-sm-1">
-              <input tabindex="<?php print $tabindex+2; ?>" type="button" class="btn btn-sm" id="password_generator" onclick="random_password();" value="Generate password">
-            </div>
-          </div>
-
-          <div class="form-group" id="confirm_div">
-            <label for="confirm" class="col-sm-3 control-label">Confirm</label>
-            <div class="col-sm-6">
-              <input tabindex="<?php print $tabindex+3; ?>" type="password" class="form-control" id="confirm" name="password_match"
-                     maxlength="<?php echo (int)MAX_LEN; ?>"
-                     oninput="check_passwords_match();">
-            </div>
-          </div>
-
-<?php if ($EMAIL_SENDING_ENABLED == TRUE && $admin_setup != TRUE) { ?>
-          <div class="form-group" id="send_email_div">
-            <label for="send_email" class="col-sm-3 control-label"> </label>
-            <div class="col-sm-6">
-              <input tabindex="<?php print $tabindex+4; ?>" type="checkbox" class="form-check-input" id="send_email_checkbox" name="send_email" <?php if ($disabled_email_tickbox == TRUE) { print "disabled"; } ?>>  Email these credentials to the user?
+        <div class="form-group" id="password_div">
+          <label for="password" class="col-sm-3 control-label">Password</label>
+          <div class="col-sm-6">
+            <input tabindex="<?php print $tabindex+1; ?>" type="password" class="form-control" id="password" name="password"
+                   maxlength="<?php echo (int)MAX_LEN; ?>"
+                   oninput="updateMeter(<?php echo (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN); ?>); check_passwords_match();">
+            <div class="help-min text-left" style="margin-top:6px;">
+              Policy: minimum <strong><?php echo (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN); ?></strong> characters for new accounts; maximum <strong><?php echo (int)MAX_LEN; ?></strong>. No composition rules.
             </div>
           </div>
-<?php } ?>
-
-          <div class="form-group">
-            <button tabindex="<?php print $tabindex+5; ?>" type="submit" class="btn btn-warning">Create account</button>
-          </div>
-        </form>
-
-        <!-- Length-only progress bar -->
-        <div class="progress" style="height: 18px;">
-          <div id="LengthProgress" class="progress-bar" role="progressbar" style="width:0%;">
-            <span id="LengthLabel">0</span>
+          <div class="col-sm-3">
+            <input tabindex="<?php print $tabindex+2; ?>" type="button" class="btn btn-soft btn-pill btn-sm" id="password_generator" onclick="random_password();" value="Generate password">
           </div>
         </div>
 
-        <div><sup>&ast;</sup>The account identifier</div>
+        <div class="form-group" id="confirm_div">
+          <label for="confirm" class="col-sm-3 control-label">Confirm</label>
+          <div class="col-sm-6">
+            <input tabindex="<?php print $tabindex+3; ?>" type="password" class="form-control" id="confirm" name="password_match"
+                   maxlength="<?php echo (int)MAX_LEN; ?>"
+                   oninput="check_passwords_match();">
+          </div>
+        </div>
+
+<?php if ($EMAIL_SENDING_ENABLED == TRUE && $admin_setup != TRUE) { ?>
+        <div class="form-group" id="send_email_div">
+          <label for="send_email" class="col-sm-3 control-label"> </label>
+          <div class="col-sm-6">
+            <label class="help-min" style="margin:0">
+              <input tabindex="<?php print $tabindex+4; ?>" type="checkbox" class="form-check-input" id="send_email_checkbox" name="send_email" <?php if ($disabled_email_tickbox == TRUE) { print "disabled"; } ?>>
+              Email these credentials to the user?
+            </label>
+          </div>
+        </div>
+<?php } ?>
+
+        <div class="form-group text-center">
+          <button tabindex="<?php print $tabindex+5; ?>" type="submit" class="btn btn-primary btn-pill">Create account</button>
+        </div>
+      </form>
+
+      <!-- Length-only progress bar -->
+      <div class="progress progress-modern">
+        <div id="LengthProgress" class="progress-bar" role="progressbar" style="width:0%;">
+          <span id="LengthLabel">0</span>
+        </div>
+      </div>
+
+      <div class="help-min text-center" style="margin-top:6px;">
+        <sup>&ast;</sup>The account identifier
       </div>
     </div>
-
   </div>
 </div>
 
