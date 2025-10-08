@@ -15,35 +15,34 @@ function mtls_last_mail_error(): string {
 // --- MAILER wired to your env (PHPMailer SMTP) ---
 // Required to use SMTP:  SMTP_HOSTNAME
 // Common vars you already use: SMTP_HOST_PORT, SMTP_USERNAME, SMTP_PASSWORD_FILE (entrypoint sets SMTP_PASSWORD)
-// Optional: SMTP_PASSWORD, SMTP_ENCRYPTION (tls|ssl|none), SMTP_AUTOTLS (true|false), SMTP_FROM
+// Optional: SMTP_PASSWORD, SMTP_ENCRYPTION (tls|ssl|none), SMTP_AUTOTLS (true|false), EMAIL_FROM_ADDRESS (preferred from)
 function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
   $GLOBALS['__MTLS_MAIL_ERR'] = '';
 
   // Your envs
-  $host = getenv('SMTP_HOSTNAME') ?: '';              // set in compose as ${SMTP_HOST}
-  $port = (int)(getenv('SMTP_HOST_PORT') ?: 587);     // ${SMTP_PORT}
-  $user = getenv('SMTP_USERNAME') ?: '';              // ${SMTP_NAME}
-  $pass = getenv('SMTP_PASSWORD') ?: '';              // entrypoint populates from SMTP_PASSWORD_FILE
+  $host = getenv('SMTP_HOSTNAME') ?: '';
+  $port = (int)(getenv('SMTP_HOST_PORT') ?: 587);
+  $user = getenv('SMTP_USERNAME') ?: '';
+  $pass = getenv('SMTP_PASSWORD') ?: ''; // entrypoint may set from SMTP_PASSWORD_FILE
   $from = getenv('EMAIL_FROM_ADDRESS') ?: ($fallbackFrom ?: ($user ?: 'no-reply@localhost'));
 
-  // TLS mapping: prefer your boolean SMTP_USE_TLS, else fall back to SMTP_ENCRYPTION (if you ever set it), else default tls.
+  // TLS mapping: prefer boolean SMTP_USE_TLS, else fallback to SMTP_ENCRYPTION, default tls
   $enc = 'tls';
   $use_tls = getenv('SMTP_USE_TLS');
   if ($use_tls !== false && $use_tls !== '') {
     $enc = (strtolower(trim($use_tls)) === 'true' || trim($use_tls) === '1') ? 'tls' : 'none';
   } else {
-    $enc = strtolower(getenv('SMTP_ENCRYPTION') ?: 'tls');  // optional, not required in your setup
+    $enc = strtolower(getenv('SMTP_ENCRYPTION') ?: 'tls');  // optional
   }
-  $autotls = ($enc === 'tls'); // sensible default unless you disable it below
+  $autotls = ($enc === 'tls');
 
-  // Probe socket (optional but helpful in logs)
+  // Quick socket probe for logs
   $errno = 0; $errstr = '';
   if ($host && !@fsockopen($host, $port, $errno, $errstr, 5)) {
     error_log("[mtls] SMTP connect probe failed to {$host}:{$port} - {$errno} {$errstr}");
-    // continue; PHPMailer will give a richer error if present
   }
 
-  // Load PHPMailer (same paths you used)
+  // Load PHPMailer if present
   $base = '/opt/PHPMailer/src';
   $havePHPMailer = false;
   if (is_file("$base/PHPMailer.php")) {
@@ -87,7 +86,7 @@ function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
         $mail->SMTPAuth = false;
       }
 
-      // Optional relax for self-signed (keep your existing behavior)
+      // Optional relax for self-signed
       if (strtolower(getenv('SMTP_ALLOW_SELF_SIGNED') ?: 'false') === 'true') {
         $mail->SMTPOptions = [
           'ssl' => [
@@ -125,7 +124,7 @@ function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
     }
   }
 
-  // PHPMailer not present → fall back to mail() (same as your original, but report the reason if it fails)
+  // PHPMailer not present → fall back to mail()
   $headers = "From: {$from}\r\nContent-Type: text/plain; charset=UTF-8";
   $ok = @mail($to, $subject, $body, $headers);
   if (!$ok) $GLOBALS['__MTLS_MAIL_ERR'] = 'mail() failed (no local MTA?)';
@@ -204,8 +203,6 @@ $MAIL_FROM      = getenv('MTLS_MAIL_FROM') ?: (getenv('EMAIL_FROM_ADDRESS') ?: '
 $CODE_TTL_SEC   = 300; // 5 minutes
 $TOKEN_TTL_SEC  = 300; // 5 minutes
 $APPRISE_URL    = getenv('APPRISE_URL'); // optional
-$CERT_BASE      = getenv('MTLS_CERT_BASE') ?: '/mnt/mtls-certs';
-$P12_PASS       = getenv('MTLS_P12_PASS') ?: '';
 
 // ---------- Actions ----------
 $action = isset($_GET['action']) ? $_GET['action'] : '';
@@ -277,33 +274,6 @@ if ($action === 'verify_code') {
   $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
   file_put_contents($tfile, json_encode($tokRec), LOCK_EX);
 
-  // Compute expiry days (best effort)
-  $expires_days = null;
-  $safeUid = preg_replace('/[^a-zA-Z0-9_.-]/', '_', $uid);
-  $crt_path = $CERT_BASE . '/' . $safeUid . '/client.crt';
-  $p12_path = $CERT_BASE . '/' . $safeUid . '/client.p12';
-
-  if (is_file($crt_path)) {
-    $pem = @file_get_contents($crt_path);
-    if ($pem !== false) {
-      $x = @openssl_x509_parse($pem);
-      if ($x && isset($x['validTo_time_t'])) {
-        $expires_days = (int) floor(($x['validTo_time_t'] - time()) / 86400);
-      }
-    }
-  } elseif (is_file($p12_path) && $P12_PASS !== '') {
-    $p12 = @file_get_contents($p12_path);
-    $out = array();
-    if ($p12 !== false && @openssl_pkcs12_read($p12, $out, $P12_PASS)) {
-      if (!empty($out['cert'])) {
-        $x = @openssl_x509_parse($out['cert']);
-        if ($x && isset($x['validTo_time_t'])) {
-          $expires_days = (int) floor(($x['validTo_time_t'] - time()) / 86400);
-        }
-      }
-    }
-  }
-
   // Optional Apprise: token issued
   if (!empty($APPRISE_URL)) {
     $msg = "mTLS token issued for {$uid}, expires in 5m";
@@ -311,26 +281,29 @@ if ($action === 'verify_code') {
     @exec($cmd);
   }
 
-  json_ok(array('token'=>$token, 'expires_days'=>$expires_days));
+  // Note: expires_days is populated by the host stager; UI should poll token_info
+  json_ok(array('token'=>$token, 'expires_days'=>null));
 }
 
 if ($action === 'token_info') {
-    $token = isset($Body['token']) ? (string)$Body['token'] : '';
-    if (!preg_match('/^[a-f0-9]{48}$/', $token)) json_fail('Bad token');
-    $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
-    $ufile = $tfile . '.used';
-  
-    $rec = null;
-    if (is_file($tfile)) {
-      $rec = json_decode((string)file_get_contents($tfile), true);
-    } elseif (is_file($ufile)) {
-      $rec = json_decode((string)file_get_contents($ufile), true);
-    }
-    if (!is_array($rec)) json_fail('Token not found', 404);
-    if (($rec['session'] ?? '') !== session_id()) json_fail('Session mismatch', 403);
-  
-    $days = isset($rec['expires_days']) && is_numeric($rec['expires_days']) ? (int)$rec['expires_days'] : null;
-    json_ok(['expires_days' => $days]);
+  $token = isset($Body['token']) ? (string)$Body['token'] : '';
+  if (!preg_match('/^[a-f0-9]{48}$/', $token)) json_fail('Bad token');
+
+  $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
+  $ufile = $tfile . '.used';
+
+  $rec2 = null;
+  if (is_file($tfile)) {
+    $rec2 = json_decode((string)file_get_contents($tfile), true);
+  } elseif (is_file($ufile)) {
+    $rec2 = json_decode((string)file_get_contents($ufile), true);
+  }
+  if (!is_array($rec2)) json_fail('Token not found', 404);
+  if (($rec2['session'] ?? '') !== session_id()) json_fail('Session mismatch', 403);
+
+  $days = (isset($rec2['expires_days']) && is_numeric($rec2['expires_days']))
+    ? (int)$rec2['expires_days'] : null;
+  json_ok(['expires_days' => $days]);
 }
 
 // Unknown action
