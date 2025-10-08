@@ -1,5 +1,5 @@
 <?php
-// www/account_manager/show_user.php
+// www/account_manager/show_user.php  (modernized styling, same logic)
 
 set_include_path(".:" . __DIR__ . "/../includes/");
 
@@ -114,11 +114,9 @@ if ($ldap_search) {
   }
 
   // ---- Determine policy for this target account (admin? MFA?) ----
-  // Admin role if member of admins group:
   $target_groups = ldap_user_group_membership($ldap_connection, $account_identifier);
   $target_is_admin = in_array($LDAP['admins_group'], $target_groups);
 
-  // MFA state if available
   $has_mfa = true;
   if (function_exists('user_has_mfa')) {
     try { $has_mfa = (bool)user_has_mfa($account_identifier); } catch (Throwable $e) { $has_mfa = true; }
@@ -219,12 +217,11 @@ if ($ldap_search) {
     <div class="alert alert-warning"><p class="text-center">The passwords didn't match.</p></div>
   <?php }
 
-  // ---- Group lists (reuse earlier membership) ----
+  // ---- Group lists ----
   $all_groups = ldap_get_group_list($ldap_connection);
   $currently_member_of = $target_groups;
   $not_member_of = array_diff($all_groups, $currently_member_of);
 
-  // Group membership updates
   if (isset($_POST["update_member_of"])) {
     $updated_group_membership = array();
     foreach ($_POST as $index => $group) {
@@ -280,8 +277,7 @@ function random_password(){
 }
 
 function back_to_hidden(passwordField,confirmField){
-  // kept for compatibility with your existing onkeyup calls (no-op in our flow)
-  return;
+  return; // no-op, kept for compatibility
 }
 
 function check_passwords_match(){
@@ -313,174 +309,196 @@ document.addEventListener('DOMContentLoaded', updateMeter);
 <?php render_dynamic_field_js(); ?>
 
 <style type='text/css'>
-  .dual-list .list-group { margin-top: 8px; }
-  .list-left li, .list-right li { cursor: pointer; }
-  .list-arrows { padding-top: 100px; }
-  .list-arrows button { margin-bottom: 20px; }
-  .right_button { width: 200px; float: right; }
+/* ---------- modern chrome ---------- */
+.wrap-narrow { max-width: 1100px; margin: 18px auto 32px; }
+.panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
+.panel-modern .panel-heading {
+  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+  color:#cfe9ff; font-weight:600; letter-spacing:.4px; text-transform:uppercase;
+  padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.08);
+}
+.panel-modern .panel-body { padding:16px 16px 18px; }
+.help-min { color:#8aa0b2; font-size:12px; }
+.btn-pill { border-radius:999px; }
+.btn-soft { background:#121820; border:1px solid rgba(255,255,255,.12); color:#cfe9ff; }
+.btn-soft:hover { background:#17202b; }
+.progress-modern { height:18px; background:#0e151d; border:1px solid rgba(255,255,255,.08); border-radius:10px; }
+.progress-modern .progress-bar { line-height:16px; font-size:12px; }
+/* dual list tweaks to keep your JS selectors working while looking nicer */
+.dual-list .well { background:#0e151d; border:1px solid rgba(255,255,255,.08); border-radius:10px; }
+.dual-list .list-group-item { background:transparent; border-color:rgba(255,255,255,.08); color:#cfe9ff; }
+.dual-list .list-group-item.active { background:#1a2b3a; border-color:#294155; }
+.list-arrows button { margin-bottom: 12px; }
+.panel-title h3 { margin:0; font-size:18px; letter-spacing:.2px; }
+.invisible { visibility:hidden; } .visible { visibility:visible; }
+.right_button { width: 200px; float: right; } /* preserved */
 </style>
 
-<div class="container">
-  <div class="col-sm-8 col-md-offset-2">
-
-    <div class="panel panel-default">
-      <div class="panel-heading clearfix">
-        <span class="panel-title pull-left"><h3><?php print $account_identifier; ?></h3></span>
-        <button class="btn btn-warning pull-right align-self-end" style="margin-top: auto;" onclick="show_delete_user_button();" <?php if ($account_identifier == $USER_ID) { print "disabled"; }?>>Delete account</button>
-        <form action="<?php print "{$THIS_MODULE_PATH}"; ?>/index.php" method="post"><input type="hidden" name="delete_user" value="<?php print urlencode($account_identifier); ?>"><button class="btn btn-danger pull-right invisible" id="delete_user">Confirm deletion</button></form>
-      </div>
-      <ul class="list-group">
-        <li class="list-group-item"><?php print $dn; ?></li>
-      </ul>
-
-      <div class="panel-body">
-        <form class="form-horizontal" action="" enctype="multipart/form-data" method="post">
-          <input type="hidden" name="update_account">
-          <input type="hidden" name="account_identifier" value="<?php print $account_identifier; ?>">
-
-          <?php
-            foreach ($attribute_map as $attribute => $attr_r) {
-              $label = $attr_r['label'];
-              $onkeyup = isset($attr_r['onkeyup']) ? $attr_r['onkeyup'] : "";
-              $inputtype = isset($attr_r['inputtype']) ? $attr_r['inputtype'] : "";
-              if ($attribute == $LDAP['account_attribute']) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
-              $these_values = isset($$attribute) ? $$attribute : array();
-              render_attribute_fields($attribute,$label,$these_values,$dn,$onkeyup,$inputtype);
-            }
-          ?>
-
-          <div class="form-group" id="password_div">
-            <label for="password" class="col-sm-3 control-label">Password</label>
-            <div class="col-sm-6">
-              <input type="password" class="form-control" id="password" name="password"
-                     maxlength="<?php echo (int)MAX_LEN; ?>"
-                     oninput="back_to_hidden('password','confirm'); check_if_we_should_enable_sending_email(); updateMeter();">
-              <div class="help-block text-left" style="margin-top:6px;">
-                Policy: minimum <strong><?php echo (int)$min_len; ?></strong> characters<?php
-                  if ($target_is_admin || !$has_mfa) { echo " (admins &amp; accounts without MFA: <strong>" . (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN) . "+</strong>)"; }
-                ?>; maximum <strong><?php echo (int)MAX_LEN; ?></strong>. No composition rules.
-              </div>
-            </div>
-            <div class="col-sm-1">
-              <input type="button" class="btn btn-sm" id="password_generator" onclick="random_password();" value="Generate password">
-            </div>
-          </div>
-
-          <div class="form-group" id="confirm_div">
-            <label for="confirm" class="col-sm-3 control-label">Confirm</label>
-            <div class="col-sm-6">
-              <input type="password" class="form-control" id="confirm" name="password_match"
-                     maxlength="<?php echo (int)MAX_LEN; ?>"
-                     oninput="check_passwords_match();">
-            </div>
-          </div>
-
-<?php if ($can_send_email == TRUE) { ?>
-          <div class="form-group" id="send_email_div">
-            <label for="send_email" class="col-sm-3 control-label"> </label>
-            <div class="col-sm-6">
-              <input type="checkbox" class="form-check-input" id="send_email_checkbox" name="send_email" disabled>  Email the updated credentials to the user?
-            </div>
-          </div>
-<?php } ?>
-
-          <div class="form-group">
-            <p align='center'><button type="submit" class="btn btn-default">Update account details</button></p>
-          </div>
-
+<div class="container wrap-narrow">
+  <div class="panel panel-modern">
+    <div class="panel-heading clearfix">
+      <div class="pull-left"><span class="panel-title"><h3><?php print $account_identifier; ?></h3></span></div>
+      <div class="pull-right">
+        <button class="btn btn-warning btn-pill" onclick="show_delete_user_button();" <?php if ($account_identifier == $USER_ID) { print "disabled"; }?>>Delete account</button>
+        <form action="<?php print "{$THIS_MODULE_PATH}"; ?>/index.php" method="post" style="display:inline;">
+          <input type="hidden" name="delete_user" value="<?php print urlencode($account_identifier); ?>">
+          <button class="btn btn-danger btn-pill invisible" id="delete_user">Confirm deletion</button>
         </form>
-
-        <!-- Length-only progress bar -->
-        <div class="progress" style="height:18px;">
-          <div id="LengthProgress" class="progress-bar" role="progressbar" style="width:0%;">
-            <span id="LengthLabel">0</span>
-          </div>
-        </div>
-
-        <div><p align='center'><sup>&ast;</sup>The account identifier.  Changing this will change the full <strong>DN</strong>.</p></div>
       </div>
     </div>
 
+    <ul class="list-group">
+      <li class="list-group-item" style="background:transparent;border-color:rgba(255,255,255,.08);color:#9fb6c9;"><?php print $dn; ?></li>
+    </ul>
+
+    <div class="panel-body">
+      <form class="form-horizontal" action="" enctype="multipart/form-data" method="post">
+        <input type="hidden" name="update_account">
+        <input type="hidden" name="account_identifier" value="<?php print $account_identifier; ?>">
+
+        <?php
+          foreach ($attribute_map as $attribute => $attr_r) {
+            $label = $attr_r['label'];
+            $onkeyup = isset($attr_r['onkeyup']) ? $attr_r['onkeyup'] : "";
+            $inputtype = isset($attr_r['inputtype']) ? $attr_r['inputtype'] : "";
+            if ($attribute == $LDAP['account_attribute']) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
+            $these_values = isset($$attribute) ? $$attribute : array();
+            render_attribute_fields($attribute,$label,$these_values,$dn,$onkeyup,$inputtype);
+          }
+        ?>
+
+        <div class="form-group" id="password_div">
+          <label for="password" class="col-sm-3 control-label">Password</label>
+          <div class="col-sm-6">
+            <input type="password" class="form-control" id="password" name="password"
+                   maxlength="<?php echo (int)MAX_LEN; ?>"
+                   oninput="back_to_hidden('password','confirm'); check_if_we_should_enable_sending_email(); updateMeter();">
+            <div class="help-min text-left" style="margin-top:6px;">
+              Policy: minimum <strong><?php echo (int)$min_len; ?></strong> characters<?php
+                if ($target_is_admin || !$has_mfa) { echo " (admins &amp; accounts without MFA: <strong>" . (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN) . "+</strong>)"; }
+              ?>; maximum <strong><?php echo (int)MAX_LEN; ?></strong>. No composition rules.
+            </div>
+          </div>
+          <div class="col-sm-3">
+            <input type="button" class="btn btn-soft btn-pill btn-sm right_button" id="password_generator" onclick="random_password();" value="Generate password">
+          </div>
+        </div>
+
+        <div class="form-group" id="confirm_div">
+          <label for="confirm" class="col-sm-3 control-label">Confirm</label>
+          <div class="col-sm-6">
+            <input type="password" class="form-control" id="confirm" name="password_match"
+                   maxlength="<?php echo (int)MAX_LEN; ?>"
+                   oninput="check_passwords_match();">
+          </div>
+        </div>
+
+<?php if ($can_send_email == TRUE) { ?>
+        <div class="form-group" id="send_email_div">
+          <label for="send_email" class="col-sm-3 control-label"> </label>
+          <div class="col-sm-6">
+            <label class="help-min" style="margin:0">
+              <input type="checkbox" class="form-check-input" id="send_email_checkbox" name="send_email" disabled>
+              Email the updated credentials to the user?
+            </label>
+          </div>
+        </div>
+<?php } ?>
+
+        <div class="form-group">
+          <p class='text-center'>
+            <button type="submit" class="btn btn-primary btn-pill">Update account details</button>
+          </p>
+        </div>
+      </form>
+
+      <!-- Length-only progress bar -->
+      <div class="progress progress-modern">
+        <div id="LengthProgress" class="progress-bar" role="progressbar" style="width:0%;">
+          <span id="LengthLabel">0</span>
+        </div>
+      </div>
+
+      <div class="help-min text-center" style="margin-top:6px;">
+        <sup>&ast;</sup>The account identifier. Changing this will change the full <strong>DN</strong>.
+      </div>
+    </div>
   </div>
 </div>
 
-<div class="container">
-  <div class="col-sm-12">
+<div class="container wrap-narrow">
+  <div class="panel panel-modern">
+    <div class="panel-heading clearfix">
+      <h3 class="panel-title pull-left" style="padding-top:7.5px;">Group membership</h3>
+    </div>
+    <div class="panel-body">
 
-    <div class="panel panel-default">
-      <div class="panel-heading clearfix">
-        <h3 class="panel-title pull-left" style="padding-top: 7.5px;">Group membership</h3>
-      </div>
-      <div class="panel-body">
-
-        <div class="row">
-          <div class="dual-list list-left col-md-5">
-            <strong>Member of</strong>
-            <div class="well">
-              <div class="row">
-                <div class="col-md-10">
-                  <div class="input-group">
-                    <span class="input-group-addon glyphicon glyphicon-search"></span>
-                    <input type="text" name="SearchDualList" class="form-control" placeholder="search" />
-                  </div>
-                </div>
-                <div class="col-md-2">
-                  <div class="btn-group">
-                    <a class="btn btn-default selector" title="select all"><i class="glyphicon glyphicon-unchecked"></i></a>
-                  </div>
+      <div class="row">
+        <div class="dual-list list-left col-md-5">
+          <strong>Member of</strong>
+          <div class="well">
+            <div class="row">
+              <div class="col-md-10">
+                <div class="input-group">
+                  <span class="input-group-addon glyphicon glyphicon-search"></span>
+                  <input type="text" name="SearchDualList" class="form-control" placeholder="search" />
                 </div>
               </div>
-              <ul class="list-group" id="member_of_list">
-                <?php
-                foreach ($member_of as $group) {
-                  if ($group == $LDAP["admins_group"] && $USER_ID == $account_identifier) {
-                    print "<div class='list-group-item' style='opacity: 0.5; pointer-events:none;'>{$group}</div>\n";
-                  } else {
-                    print "<li class='list-group-item'>$group</li>\n";
-                  }
+              <div class="col-md-2">
+                <div class="btn-group">
+                  <a class="btn btn-soft btn-pill selector" title="select all"><i class="glyphicon glyphicon-unchecked"></i></a>
+                </div>
+              </div>
+            </div>
+            <ul class="list-group" id="member_of_list">
+              <?php
+              foreach ($member_of as $group) {
+                if ($group == $LDAP["admins_group"] && $USER_ID == $account_identifier) {
+                  print "<div class='list-group-item' style='opacity: 0.5; pointer-events:none;'>{$group}</div>\n";
+                } else {
+                  print "<li class='list-group-item'>$group</li>\n";
                 }
-                ?>
-              </ul>
-            </div>
+              }
+              ?>
+            </ul>
           </div>
+        </div>
 
-          <div class="list-arrows col-md-1 text-center">
-            <button class="btn btn-default btn-sm move-left"><span class="glyphicon glyphicon-chevron-left"></span></button>
-            <button class="btn btn-default btn-sm move-right"><span class="glyphicon glyphicon-chevron-right"></span></button>
-            <form id="update_with_groups" action="<?php print $CURRENT_PAGE ?>" method="post">
-              <input type="hidden" name="update_member_of">
-              <input type="hidden" name="account_identifier" value="<?php print $account_identifier; ?>">
-            </form>
-            <button id="submit_members" class="btn btn-info" disabled type="submit" onclick="update_form_with_groups()">Save</button>
-          </div>
+        <div class="list-arrows col-md-1 text-center">
+          <button class="btn btn-soft btn-sm btn-pill move-left"><span class="glyphicon glyphicon-chevron-left"></span></button>
+          <button class="btn btn-soft btn-sm btn-pill move-right"><span class="glyphicon glyphicon-chevron-right"></span></button>
+          <form id="update_with_groups" action="<?php print $CURRENT_PAGE ?>" method="post">
+            <input type="hidden" name="update_member_of">
+            <input type="hidden" name="account_identifier" value="<?php print $account_identifier; ?>">
+          </form>
+          <button id="submit_members" class="btn btn-primary btn-pill" disabled type="submit" onclick="update_form_with_groups()">Save</button>
+        </div>
 
-          <div class="dual-list list-right col-md-5">
-            <strong>Available groups</strong>
-            <div class="well">
-              <div class="row">
-                <div class="col-md-2">
-                  <div class="btn-group">
-                    <a class="btn btn-default selector" title="select all"><i class="glyphicon glyphicon-unchecked"></i></a>
-                  </div>
-                </div>
-                <div class="col-md-10">
-                  <div class="input-group">
-                    <input type="text" name="SearchDualList" class="form-control" placeholder="search" />
-                    <span class="input-group-addon glyphicon glyphicon-search"></span>
-                  </div>
+        <div class="dual-list list-right col-md-5">
+          <strong>Available groups</strong>
+          <div class="well">
+            <div class="row">
+              <div class="col-md-2">
+                <div class="btn-group">
+                  <a class="btn btn-soft btn-pill selector" title="select all"><i class="glyphicon glyphicon-unchecked"></i></a>
                 </div>
               </div>
-              <ul class="list-group">
-                <?php foreach ($not_member_of as $group) { print "<li class='list-group-item'>$group</li>\n"; } ?>
-              </ul>
+              <div class="col-md-10">
+                <div class="input-group">
+                  <input type="text" name="SearchDualList" class="form-control" placeholder="search" />
+                  <span class="input-group-addon glyphicon glyphicon-search"></span>
+                </div>
+              </div>
             </div>
+            <ul class="list-group">
+              <?php foreach ($not_member_of as $group) { print "<li class='list-group-item'>$group</li>\n"; } ?>
+            </ul>
           </div>
+        </div>
+      </div><!-- /row -->
 
-        </div><!-- /row -->
-      </div><!-- /panel-body -->
-    </div><!-- /panel -->
-
-  </div>
+    </div><!-- /panel-body -->
+  </div><!-- /panel -->
 </div>
 
 <script type="text/javascript">
