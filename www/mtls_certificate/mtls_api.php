@@ -7,6 +7,20 @@ include_once 'web_functions.inc.php';
 header('Content-Type: application/json');
 
 // ---------- Helpers ----------
+// ---- Apprise notify (multipart -F like your working script) ----
+function mtls_apprise_notify(string $body, ?string $tag = null): void {
+  $url = getenv('APPRISE_URL');
+  if (!$url) return;
+  $tag = $tag ?: (getenv('APPRISE_TAG') ?: 'matrix_group_system_alerts');
+
+  // Build: curl -s -X POST -F "body=..." -F "tag=..." "$url"  & (fire-and-forget)
+  $cmd = 'curl -s -X POST'
+       . ' -F ' . escapeshellarg('body=' . $body)
+       . ' -F ' . escapeshellarg('tag=' . $tag)
+       . ' '   . escapeshellarg($url)
+       . ' >/dev/null 2>&1 &';
+  @exec($cmd);
+}
 // track the last mail error so we can bubble it to JSON
 $__MTLS_MAIL_ERR = '';
 function mtls_last_mail_error(): string {
@@ -322,12 +336,14 @@ if ($action === 'verify_code') {
   $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
   file_put_contents($tfile, json_encode($tokRec), LOCK_EX);
 
-  // Optional Apprise: token issued
-  if (!empty($APPRISE_URL)) {
-    $msg = "mTLS token issued for {$uid}, expires in 5m";
-    $cmd = 'curl -s -X POST --form-string ' . escapeshellarg('body=' . $msg) . ' ' . escapeshellarg($APPRISE_URL) . ' >/dev/null 2>&1 &';
-    @exec($cmd);
-  }
+  // Optional Apprise: token issued (styled like your other notifications)
+  $host = $_SERVER['HTTP_HOST'] ?? php_uname('n') ?? 'host';
+  $ip   = $_SERVER['REMOTE_ADDR'] ?? '';
+  $body = '🔐 `' . $host . '` **mTLS Token Issued**:<br />'
+        . 'User: <code>' . $uid . '</code><br />'
+        . 'IP: <code>' . $ip . '</code><br />'
+        . 'TTL: 5m';
+  mtls_apprise_notify($body);
 
   // Note: expires_days is populated by the host stager; UI should poll token_info
   json_ok(array('token'=>$token, 'expires_days'=>null));
