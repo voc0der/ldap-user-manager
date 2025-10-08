@@ -304,6 +304,25 @@ if ($action === 'verify_code') {
     }
   }
 
+  if ($action === 'token_info') {
+    $token = isset($Body['token']) ? (string)$Body['token'] : '';
+    if (!preg_match('/^[a-f0-9]{48}$/', $token)) json_fail('Bad token');
+    $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
+    $ufile = $tfile . '.used';
+  
+    $rec = null;
+    if (is_file($tfile)) {
+      $rec = json_decode((string)file_get_contents($tfile), true);
+    } elseif (is_file($ufile)) {
+      $rec = json_decode((string)file_get_contents($ufile), true);
+    }
+    if (!is_array($rec)) json_fail('Token not found', 404);
+    if (($rec['session'] ?? '') !== session_id()) json_fail('Session mismatch', 403);
+  
+    $days = isset($rec['expires_days']) && is_numeric($rec['expires_days']) ? (int)$rec['expires_days'] : null;
+    json_ok(['expires_days' => $days]);
+  }
+
   // Optional Apprise: token issued
   if (!empty($APPRISE_URL)) {
     $msg = "mTLS token issued for {$uid}, expires in 5m";
