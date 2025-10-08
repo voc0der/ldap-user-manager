@@ -183,7 +183,7 @@ if (!$uid) json_fail('Not authenticated', 401);
 if (!in_array('mtls', $groups, true)) json_fail('Not in mtls group', 403);
 
 // ---------- Storage paths ----------
-$APP_ROOT = dirname(__DIR__, 1);           // e.g. /opt/ldap_user_manager
+$APP_ROOT = realpath(dirname(__DIR__, 2));   // e.g. /opt/ldap_user_manager
 $DATA     = $APP_ROOT . '/data/mtls';
 $CODES    = $DATA . '/codes';
 $TOKENS   = $DATA . '/tokens';
