@@ -70,16 +70,6 @@ ARG LDAP_TLS_CACERT=ca.crt
 RUN mkdir -p /etc/ldap && \
     echo "TLS_CACERT /opt/ssl/${LDAP_TLS_CACERT}" > /etc/ldap/ldap.conf
 
-# >>> CHANGED: remove build-time user/group creation (PUID/PGID handled at runtime by entrypoint)
-# (deleted the ARG PUID/PGID + useradd/groupadd + USER appuser block)
-
-# Create mTLS state directories (codes/tokens/logs); ownership fixed at runtime in entrypoint
-RUN set -eux; \
-    install -d -m 0777 /opt/ldap_user_manager/data/mtls/codes \
-                       /opt/ldap_user_manager/data/mtls/tokens \
-                       /opt/ldap_user_manager/data/mtls/logs; \
-    chmod -R 0777 /opt/ldap_user_manager/data/mtls
-
 # Set the entrypoint and command
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
 CMD ["apache2-foreground"]
