@@ -304,7 +304,17 @@ if ($action === 'verify_code') {
     }
   }
 
-  if ($action === 'token_info') {
+  // Optional Apprise: token issued
+  if (!empty($APPRISE_URL)) {
+    $msg = "mTLS token issued for {$uid}, expires in 5m";
+    $cmd = 'curl -s -X POST --form-string ' . escapeshellarg('body=' . $msg) . ' ' . escapeshellarg($APPRISE_URL) . ' >/dev/null 2>&1 &';
+    @exec($cmd);
+  }
+
+  json_ok(array('token'=>$token, 'expires_days'=>$expires_days));
+}
+
+if ($action === 'token_info') {
     $token = isset($Body['token']) ? (string)$Body['token'] : '';
     if (!preg_match('/^[a-f0-9]{48}$/', $token)) json_fail('Bad token');
     $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
@@ -321,16 +331,6 @@ if ($action === 'verify_code') {
   
     $days = isset($rec['expires_days']) && is_numeric($rec['expires_days']) ? (int)$rec['expires_days'] : null;
     json_ok(['expires_days' => $days]);
-  }
-
-  // Optional Apprise: token issued
-  if (!empty($APPRISE_URL)) {
-    $msg = "mTLS token issued for {$uid}, expires in 5m";
-    $cmd = 'curl -s -X POST --form-string ' . escapeshellarg('body=' . $msg) . ' ' . escapeshellarg($APPRISE_URL) . ' >/dev/null 2>&1 &';
-    @exec($cmd);
-  }
-
-  json_ok(array('token'=>$token, 'expires_days'=>$expires_days));
 }
 
 // Unknown action
