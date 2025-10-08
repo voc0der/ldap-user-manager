@@ -23,6 +23,16 @@ $TOKENS   = $DATA . '/tokens';
 $LOGS     = $DATA . '/logs';
 $APPRISE_URL = getenv('APPRISE_URL');
 
+function ensure_dir(string $d) {
+  if (is_dir($d)) return;
+  if (!@mkdir($d, 0775, true) && !is_dir($d)) {
+    json_fail("Cannot create directory: $d", 500);
+  }
+}
+ensure_dir($CODES);
+ensure_dir($TOKENS);
+ensure_dir($LOGS);
+
 $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
 if (!file_exists($tfile)) hard_fail(400, 'Invalid or used token');
 
