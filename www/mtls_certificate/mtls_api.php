@@ -7,115 +7,130 @@ include_once 'web_functions.inc.php';
 header('Content-Type: application/json');
 
 // ---------- Helpers ----------
+// track the last mail error so we can bubble it to JSON
+$__MTLS_MAIL_ERR = '';
+function mtls_last_mail_error(): string {
+  return $GLOBALS['__MTLS_MAIL_ERR'] ?: 'unknown mail error';
+}
 // --- MAILER wired to your env (PHPMailer SMTP) ---
 // Required to use SMTP:  SMTP_HOSTNAME
 // Common vars you already use: SMTP_HOST_PORT, SMTP_USERNAME, SMTP_PASSWORD_FILE (entrypoint sets SMTP_PASSWORD)
 // Optional: SMTP_PASSWORD, SMTP_ENCRYPTION (tls|ssl|none), SMTP_AUTOTLS (true|false), SMTP_FROM
 function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
-  $host = getenv('SMTP_HOSTNAME');                         // your var
-  if (!$host) {
-    // No SMTP configured → try mail() as last resort
-    $from = $fallbackFrom ?: (getenv('SMTP_USERNAME') ?: 'no-reply@localhost');
-    $headers = "From: {$from}\r\nContent-Type: text/plain; charset=UTF-8";
-    return @mail($to, $subject, $body, $headers);
+  $GLOBALS['__MTLS_MAIL_ERR'] = '';
+
+  // Your envs
+  $host = getenv('SMTP_HOSTNAME') ?: '';              // set in compose as ${SMTP_HOST}
+  $port = (int)(getenv('SMTP_HOST_PORT') ?: 587);     // ${SMTP_PORT}
+  $user = getenv('SMTP_USERNAME') ?: '';              // ${SMTP_NAME}
+  $pass = getenv('SMTP_PASSWORD') ?: '';              // entrypoint populates from SMTP_PASSWORD_FILE
+  $from = getenv('EMAIL_FROM_ADDRESS') ?: ($fallbackFrom ?: ($user ?: 'no-reply@localhost'));
+
+  // TLS mapping: prefer your boolean SMTP_USE_TLS, else fall back to SMTP_ENCRYPTION (if you ever set it), else default tls.
+  $enc = 'tls';
+  $use_tls = getenv('SMTP_USE_TLS');
+  if ($use_tls !== false && $use_tls !== '') {
+    $enc = (strtolower(trim($use_tls)) === 'true' || trim($use_tls) === '1') ? 'tls' : 'none';
+  } else {
+    $enc = strtolower(getenv('SMTP_ENCRYPTION') ?: 'tls');  // optional, not required in your setup
   }
+  $autotls = ($enc === 'tls'); // sensible default unless you disable it below
 
-  $port    = (int)(getenv('SMTP_HOST_PORT') ?: 587);
-  $user    = getenv('SMTP_USERNAME') ?: '';
-  // entrypoint sets SMTP_PASSWORD from SMTP_PASSWORD_FILE; prefer that
-  $pass    = getenv('SMTP_PASSWORD') ?: '';
-  $enc     = strtolower(getenv('SMTP_ENCRYPTION') ?: 'tls');         // tls|ssl|none
-  $autotls = (strtolower(getenv('SMTP_AUTOTLS') ?: 'true') !== 'false');
-  $from    = getenv('SMTP_FROM') ?: ($fallbackFrom ?: ($user ?: 'no-reply@localhost'));
-
-  // Quick socket probe so failures are obvious in docker logs
+  // Probe socket (optional but helpful in logs)
   $errno = 0; $errstr = '';
-  if (!@fsockopen($host, $port, $errno, $errstr, 5)) {
+  if ($host && !@fsockopen($host, $port, $errno, $errstr, 5)) {
     error_log("[mtls] SMTP connect probe failed to {$host}:{$port} - {$errno} {$errstr}");
-    // continue anyway; PHPMailer will give a richer error
+    // continue; PHPMailer will give a richer error if present
   }
 
+  // Load PHPMailer (same paths you used)
   $base = '/opt/PHPMailer/src';
-  if (!file_exists("$base/PHPMailer.php")) {
-    error_log('[mtls] PHPMailer not found at /opt/PHPMailer/src; cannot use SMTP; falling back to mail()');
-    $headers = "From: {$from}\r\nContent-Type: text/plain; charset=UTF-8";
-    return @mail($to, $subject, $body, $headers);
+  $havePHPMailer = false;
+  if (is_file("$base/PHPMailer.php")) {
+    require_once "$base/PHPMailer.php";
+    require_once "$base/SMTP.php";
+    require_once "$base/Exception.php";
+    $havePHPMailer = class_exists('PHPMailer\\PHPMailer\\PHPMailer');
   }
 
-  require_once "$base/PHPMailer.php";
-  require_once "$base/SMTP.php";
-  require_once "$base/Exception.php";
-
-  $PHPMailer = 'PHPMailer\\PHPMailer\\PHPMailer';
-
-  try {
-    $mail = new $PHPMailer(true);
-    $mail->isSMTP();
-    $mail->Host       = $host;
-    $mail->Port       = $port;
-
-    // Encryption + STARTTLS behavior
-    if ($enc === 'ssl' || $port === 465) {
-      $mail->SMTPSecure = 'ssl';
-      $mail->SMTPAutoTLS = false; // implicit TLS
-    } elseif ($enc === 'tls') {
-      $mail->SMTPSecure = 'tls';
-      $mail->SMTPAutoTLS = true;
-    } else { // none
-      $mail->SMTPSecure = false;
-      $mail->SMTPAutoTLS = false; // don't try opportunistic STARTTLS
-    }
-    // Allow override of autotls explicitly
-    if (!$autotls) $mail->SMTPAutoTLS = false;
-
-    // Auth if creds provided
-    if ($user !== '' || $pass !== '') {
-      $mail->SMTPAuth = true;
-      $mail->Username = $user;
-      $mail->Password = $pass;
-    } else {
-      $mail->SMTPAuth = false;
-    }
-
-    // Optional relax TLS for self-signed (set SMTP_ALLOW_SELF_SIGNED=true)
-    if (strtolower(getenv('SMTP_ALLOW_SELF_SIGNED') ?: 'false') === 'true') {
-      $mail->SMTPOptions = [
-        'ssl' => [
-          'verify_peer'       => false,
-          'verify_peer_name'  => false,
-          'allow_self_signed' => true,
-        ],
-      ];
-    }
-
-    // Optional CA file (SMTP_CA_FILE=/path/to/ca.pem)
-    $caf = getenv('SMTP_CA_FILE');
-    if ($caf && is_readable($caf)) {
-      $mail->SMTPOptions = $mail->SMTPOptions ?: [];
-      $mail->SMTPOptions['ssl']['cafile'] = $caf;
-    }
-
-    // Optional debug to docker logs: set SMTP_DEBUG=true
-    if (strtolower(getenv('SMTP_DEBUG') ?: 'false') === 'true') {
-      $mail->SMTPDebug = 2;
-      $mail->Debugoutput = function($str, $lvl) { error_log('[mtls] SMTP: ' . $str); };
-    }
-
-    $mail->setFrom($from);
-    $mail->addAddress($to);
-    $mail->Subject = $subject;
-    $mail->Body    = $body;
-    $mail->AltBody = $body;
-
-    $mail->send();
-    return true;
-  } catch (\Throwable $e) {
-    error_log('[mtls] SMTP send failed: ' . $e->getMessage() .
-              " (host={$host} port={$port} enc={$enc} auth=" . (($user!==''||$pass!=='')?'on':'off') . ")");
+  if (!$host) {
+    $GLOBALS['__MTLS_MAIL_ERR'] = 'SMTP_HOSTNAME not set';
     return false;
   }
-}
 
+  if ($havePHPMailer) {
+    $PHPMailer = 'PHPMailer\\PHPMailer\\PHPMailer';
+    try {
+      $mail = new $PHPMailer(true);
+      $mail->isSMTP();
+      $mail->Host = $host;
+      $mail->Port = $port;
+
+      // TLS/SSL/none handling
+      if ($enc === 'ssl' || $port === 465) {
+        $mail->SMTPSecure  = 'ssl';
+        $mail->SMTPAutoTLS = false;
+      } elseif ($enc === 'tls') {
+        $mail->SMTPSecure  = 'tls';
+        $mail->SMTPAutoTLS = $autotls;
+      } else { // none
+        $mail->SMTPSecure  = false;
+        $mail->SMTPAutoTLS = false;
+      }
+
+      // Auth if provided
+      if ($user !== '' || $pass !== '') {
+        $mail->SMTPAuth = true;
+        $mail->Username = $user;
+        $mail->Password = $pass;
+      } else {
+        $mail->SMTPAuth = false;
+      }
+
+      // Optional relax for self-signed (keep your existing behavior)
+      if (strtolower(getenv('SMTP_ALLOW_SELF_SIGNED') ?: 'false') === 'true') {
+        $mail->SMTPOptions = [
+          'ssl' => [
+            'verify_peer'       => false,
+            'verify_peer_name'  => false,
+            'allow_self_signed' => true,
+          ],
+        ];
+      }
+
+      // Optional CA bundle
+      $caf = getenv('SMTP_CA_FILE');
+      if ($caf && is_readable($caf)) {
+        $mail->SMTPOptions = $mail->SMTPOptions ?: [];
+        $mail->SMTPOptions['ssl']['cafile'] = $caf;
+      }
+
+      // Optional debug
+      if (strtolower(getenv('SMTP_DEBUG') ?: 'false') === 'true') {
+        $mail->SMTPDebug = 2;
+        $mail->Debugoutput = function($str, $lvl) { error_log('[mtls] SMTP: ' . $str); };
+      }
+
+      $mail->setFrom($from);
+      $mail->addAddress($to);
+      $mail->Subject = $subject;
+      $mail->Body    = $body;
+      $mail->AltBody = $body;
+
+      $mail->send();
+      return true;
+    } catch (\Throwable $e) {
+      $GLOBALS['__MTLS_MAIL_ERR'] = 'PHPMailer: ' . $e->getMessage();
+      return false;
+    }
+  }
+
+  // PHPMailer not present → fall back to mail() (same as your original, but report the reason if it fails)
+  $headers = "From: {$from}\r\nContent-Type: text/plain; charset=UTF-8";
+  $ok = @mail($to, $subject, $body, $headers);
+  if (!$ok) $GLOBALS['__MTLS_MAIL_ERR'] = 'mail() failed (no local MTA?)';
+  return $ok;
+}
 
 function json_fail($msg, $code=400) {
   http_response_code($code);
@@ -179,7 +194,7 @@ $LOGS     = $DATA . '/logs';
 @mkdir($LOGS, 0775, true);
 
 // ---------- Config ----------
-$MAIL_FROM      = getenv('MTLS_MAIL_FROM') ?: 'no-reply@localhost';
+$MAIL_FROM      = getenv('MTLS_MAIL_FROM') ?: (getenv('EMAIL_FROM_ADDRESS') ?: 'no-reply@localhost');
 $CODE_TTL_SEC   = 300; // 5 minutes
 $TOKEN_TTL_SEC  = 300; // 5 minutes
 $APPRISE_URL    = getenv('APPRISE_URL'); // optional
@@ -217,7 +232,7 @@ if ($action === 'send_code') {
 
   $sent = mtls_send_mail($email, $subj, $msg, $MAIL_FROM);
   if (!$sent) {
-    json_fail('Failed to send verification email', 500);
+    json_fail('Failed to send verification email: ' . mtls_last_mail_error(), 500);
   }
 
   file_put_contents($LOGS . '/events.log', json_encode(array('evt'=>'code_sent','uid'=>$uid,'t'=>time())) . "\n", FILE_APPEND);
