@@ -1,5 +1,5 @@
 <?php
-// www/account_manager/groups.php  (modernized styling only)
+// www/account_manager/groups.php  (TOTAL in header; right-aligned "New group" with input popping to its left)
 
 set_include_path( ".:" . __DIR__ . "/../includes/");
 
@@ -14,19 +14,14 @@ render_submenu();
 $ldap_connection = open_ldap_connection();
 
 if (isset($_POST['delete_group'])) {
-  $this_group = $_POST['delete_group'];
-  $this_group = urldecode($this_group);
-
+  $this_group = urldecode($_POST['delete_group']);
   $del_group = ldap_delete_group($ldap_connection,$this_group);
-
-  if ($del_group) {
-    render_alert_banner("Group <strong>$this_group</strong> was deleted.");
-  } else {
-    render_alert_banner("Group <strong>$this_group</strong> wasn't deleted.  See the logs for more information.","danger",15000);
-  }
+  if ($del_group) render_alert_banner("Group <strong>$this_group</strong> was deleted.");
+  else render_alert_banner("Group <strong>$this_group</strong> wasn't deleted.  See the logs for more information.","danger",15000);
 }
 
 $groups = ldap_get_group_list($ldap_connection);
+$totalGroups = count($groups);
 ldap_close($ldap_connection);
 
 render_js_username_check();
@@ -43,6 +38,7 @@ render_js_username_check();
 }
 .panel-modern .panel-title { margin:0; font-size:16px; letter-spacing:.3px; }
 .panel-modern .panel-body { padding:16px 16px 18px; }
+.header-total { margin-left:14px; color:#a9c4da; letter-spacing:.6px; font-weight:600; }
 
 .btn-pill { border-radius:999px; }
 .btn-soft { background:#121820; border:1px solid rgba(255,255,255,.12); color:#cfe9ff; }
@@ -66,6 +62,7 @@ function show_new_group_form(){
   var group_submit = document.getElementById('add_group');
   group_form.classList.replace('invisible','visible');
   group_submit.classList.replace('invisible','visible');
+  try { group_form.focus(); } catch(e){}
 }
 </script>
 
@@ -73,21 +70,29 @@ function show_new_group_form(){
   <div class="panel panel-modern">
     <div class="panel-heading clearfix">
       <div class="pull-left">
-        <h3 class="panel-title">Groups</h3>
+        <h3 class="panel-title">
+          Groups
+          <span class="header-total">TOTAL: <?php echo number_format($totalGroups); ?></span>
+        </h3>
       </div>
-      <div class="pull-right">
+
+      <!-- Right controls: input + Add (hidden by default) appear to the LEFT of "New group" -->
+      <div class="pull-right" id="new_group_div">
         <form action="<?php print "{$THIS_MODULE_PATH}"; ?>/show_group.php" method="post" class="form-inline" style="display:inline;">
           <input type="hidden" name="new_group">
-          <button type="button" class="btn btn-soft btn-pill">
-            <?php print count($groups);?> group<?php if (count($groups) != 1) { print "s"; } ?>
-          </button>
-          &nbsp;
-          <button id="show_new_group" class="btn btn-primary btn-pill" type="button" onclick="show_new_group_form();">New group</button>
-          &nbsp;
+
+          <!-- Reveal on click; placed BEFORE the button so it pops out to the left -->
           <input type="text" class="form-control invisible" name="group_name" id="group_name"
                  placeholder="Group name"
+                 style="min-width:180px;margin-right:8px;"
                  onkeyup="check_entity_name_validity(document.getElementById('group_name').value,'new_group_div');">
-          <button id="add_group" class="btn btn-success btn-pill btn-sm invisible" type="submit">Add</button>
+
+          <button id="add_group" class="btn btn-success btn-pill btn-sm invisible" type="submit" style="margin-right:10px;">Add</button>
+
+          <!-- Stays on the far right -->
+          <button id="show_new_group" class="btn btn-primary btn-pill" type="button" onclick="show_new_group_form();">
+            New group
+          </button>
         </form>
       </div>
     </div>
@@ -106,9 +111,7 @@ function show_new_group_form(){
       <div class="table-responsive">
         <table class="table table-striped table-modern">
           <thead>
-            <tr>
-              <th>Group name</th>
-            </tr>
+            <tr><th>Group name</th></tr>
           </thead>
           <tbody id="grouplist">
 <?php foreach ($groups as $group){
@@ -129,8 +132,7 @@ $(function(){
   $input.on("keyup input", function(){
     var v = $(this).val().toLowerCase();
     $rows.each(function(){
-      var show = $(this).text().toLowerCase().indexOf(v) > -1;
-      $(this).toggle(show);
+      $(this).toggle($(this).text().toLowerCase().indexOf(v) > -1);
     });
   });
 });
