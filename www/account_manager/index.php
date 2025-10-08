@@ -1,5 +1,5 @@
 <?php
-// www/account_manager/index.php  (modernized styling only)
+// www/account_manager/index.php  (modernized styling with TOTAL in header)
 
 set_include_path( ".:" . __DIR__ . "/../includes/");
 
@@ -24,6 +24,7 @@ if (isset($_POST['delete_user'])) {
 }
 
 $people = ldap_get_user_list($ldap_connection);
+$totalUsers = count($people);
 ?>
 
 <style>
@@ -37,6 +38,7 @@ $people = ldap_get_user_list($ldap_connection);
 }
 .panel-modern .panel-title { margin:0; font-size:16px; letter-spacing:.3px; }
 .panel-modern .panel-body { padding:16px 16px 18px; }
+.header-total { margin-left:14px; color:#a9c4da; letter-spacing:.6px; font-weight:600; }
 .help-min { color:#8aa0b2; font-size:12px; margin-top:6px; }
 .btn-pill { border-radius:999px; }
 .btn-soft { background:#121820; border:1px solid rgba(255,255,255,.12); color:#cfe9ff; }
@@ -52,14 +54,13 @@ $people = ldap_get_user_list($ldap_connection);
   <div class="panel panel-modern">
     <div class="panel-heading clearfix">
       <div class="pull-left">
-        <h3 class="panel-title">Users</h3>
+        <h3 class="panel-title">
+          Users
+          <span class="header-total">TOTAL: <?php echo number_format($totalUsers); ?></span>
+        </h3>
       </div>
       <div class="pull-right">
         <form action="<?php print $THIS_MODULE_PATH; ?>/new_user.php" method="post" style="display:inline;">
-          <button type="button" class="btn btn-soft btn-pill">
-            <?php print count($people);?> account<?php if (count($people) != 1) { print "s"; } ?>
-          </button>
-          &nbsp;
           <button id="add_group" class="btn btn-primary btn-pill" type="submit">New user</button>
         </form>
       </div>
