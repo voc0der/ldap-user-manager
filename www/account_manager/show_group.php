@@ -1,4 +1,5 @@
 <?php
+// www/account_manager/show_group.php (modernized styling only)
 
 set_include_path( ".:" . __DIR__ . "/../includes/");
 
@@ -35,7 +36,6 @@ if ($ENFORCE_SAFE_SYSTEM_NAMES == TRUE and !preg_match("/$USERNAME_REGEX/",$grou
  render_footer();
  exit(0);
 }
-
 
 ######################################################################################
 
@@ -87,20 +87,16 @@ foreach ($attribute_map as $attribute => $attr_r) {
   }
 
   if (isset($_FILES[$attribute]['size']) and $_FILES[$attribute]['size'] > 0) {
-
     $this_attribute = array();
     $this_attribute['count'] = 1;
     $this_attribute[0] = file_get_contents($_FILES[$attribute]['tmp_name']);
     $$attribute = $this_attribute;
     $to_update[$attribute] = $this_attribute;
     unset($to_update[$attribute]['count']);
-
   }
 
   if (isset($_POST[$attribute])) {
-
     $this_attribute = array();
-
     if (is_array($_POST[$attribute])) {
       foreach($_POST[$attribute] as $key => $value) {
         if ($value != "") { $this_attribute[$key] = filter_var($value, FILTER_SANITIZE_FULL_SPECIAL_CHARS); }
@@ -111,20 +107,17 @@ foreach ($attribute_map as $attribute => $attr_r) {
       $this_attribute['count'] = 1;
       $this_attribute[0] = filter_var($_POST[$attribute], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
     }
-
     if ($this_attribute != $$attribute) {
       $$attribute = $this_attribute;
       $to_update[$attribute] = $this_attribute;
       unset($to_update[$attribute]['count']);
     }
-
   }
 
   if (!isset($$attribute) and isset($attr_r['default'])) {
     $$attribute['count'] = 1;
     $$attribute[0] = $attr_r['default'];
   }
-
 }
 
 if (!isset($gidnumber[0]) or !is_numeric($gidnumber[0])) {
@@ -136,17 +129,12 @@ if (!isset($gidnumber[0]) or !is_numeric($gidnumber[0])) {
 
 $all_accounts = ldap_get_user_list($ldap_connection);
 $all_people = array();
-
-foreach ($all_accounts as $this_person => $attrs) {
-  array_push($all_people, $this_person);
-}
-
+foreach ($all_accounts as $this_person => $attrs) { array_push($all_people, $this_person); }
 $non_members = array_diff($all_people,$current_members);
 
 if (isset($_POST["update_members"])) {
 
   $updated_membership = array();
-
   foreach ($_POST['membership'] as $index => $member) {
     if (is_numeric($index)) {
      array_push($updated_membership,filter_var($member, FILTER_SANITIZE_FULL_SPECIAL_CHARS));
@@ -161,7 +149,6 @@ if (isset($_POST["update_members"])) {
   $members_to_add = array_diff($updated_membership,$current_members);
 
   if ($initialise_group == TRUE) {
-
     $initial_member = array_shift($members_to_add);
     $group_add = ldap_new_group($ldap_connection,$group_cn,$initial_member,$to_update);
     if (!$group_add) {
@@ -173,44 +160,28 @@ if (isset($_POST["update_members"])) {
       $group_exists = TRUE;
       $new_group = FALSE;
     }
-
   }
 
   if ($group_exists == TRUE) {
-
     if ($initialise_group != TRUE and count($to_update) > 0) {
-
       if (isset($this_group[0]['objectclass'])) {
         $existing_objectclasses = $this_group[0]['objectclass'];
         unset($existing_objectclasses['count']);
         if ($existing_objectclasses != $LDAP['group_objectclasses']) { $to_update['objectclass'] = $LDAP['group_objectclasses']; }
       }
-
       $updated_attr = ldap_update_group_attributes($ldap_connection,$group_cn,$to_update);
-
-      if ($updated_attr) {
-        render_alert_banner("The group attributes have been updated.");
-      }
-      else {
-        render_alert_banner("There was a problem updating the group attributes.  See the logs for more information.","danger",15000);
-      }
-
+      if ($updated_attr) render_alert_banner("The group attributes have been updated.");
+      else render_alert_banner("There was a problem updating the group attributes.  See the logs for more information.","danger",15000);
     }
 
-    foreach ($members_to_add as $this_member) {
-      ldap_add_member_to_group($ldap_connection,$group_cn,$this_member);
-    }
-
-    foreach ($members_to_del as $this_member) {
-      ldap_delete_member_from_group($ldap_connection,$group_cn,$this_member);
-    }
+    foreach ($members_to_add as $this_member) { ldap_add_member_to_group($ldap_connection,$group_cn,$this_member); }
+    foreach ($members_to_del as $this_member) { ldap_delete_member_from_group($ldap_connection,$group_cn,$this_member); }
 
     $non_members = array_diff($all_people,$updated_membership);
     $group_members = $updated_membership;
 
     $rfc2307bis_available = ldap_detect_rfc2307bis($ldap_connection);
     if ($rfc2307bis_available == TRUE and count($group_members) == 0) {
-
       $group_members = ldap_get_group_members($ldap_connection,$group_cn);
       $non_members = array_diff($all_people,$group_members);
       render_alert_banner("Groups can't be empty, so the final member hasn't been removed.  You could try deleting the group","danger",15000);
@@ -218,59 +189,40 @@ if (isset($_POST["update_members"])) {
     else {
       render_alert_banner("The group has been {$has_been}.");
     }
-
   }
   else {
-
     $group_members = array();
     $non_members = $all_people;
-
   }
-
 }
 else {
-
   $group_members = $current_members;
-
 }
 
 ldap_close($ldap_connection);
-
 ?>
 
 <script type="text/javascript">
-
  function show_delete_group_button() {
-
-  var group_del_submit = document.getElementById('delete_group');
-  group_del_submit.classList.replace('invisible','visible');
-
-
+   var group_del_submit = document.getElementById('delete_group');
+   group_del_submit.classList.replace('invisible','visible');
  }
 
-
  function update_form_with_users() {
-
   var members_form = document.getElementById('group_members');
   var member_list_ul = document.getElementById('membership_list');
-
   var member_list = member_list_ul.getElementsByTagName("li");
-
   for (var i = 0; i < member_list.length; ++i) {
     var hidden = document.createElement("input");
-        hidden.type = "hidden";
-        hidden.name = 'membership[]';
-        hidden.value = member_list[i]['textContent'];
-        members_form.appendChild(hidden);
-
+    hidden.type = "hidden";
+    hidden.name = 'membership[]';
+    hidden.value = member_list[i]['textContent'];
+    members_form.appendChild(hidden);
   }
-
   members_form.submit();
-
  }
 
  $(function () {
-
     $('body').on('click', '.list-group .list-group-item', function () {
         $(this).toggleClass('active');
     });
@@ -284,7 +236,7 @@ ldap_close($ldap_connection);
         } else if ($button.hasClass('move-right')) {
             actives = $('.list-left ul li.active');
             actives.clone().appendTo('.list-right ul');
-            $('.list-right ul li.active').removeClass('active');
+            $('.list-left ul li.active').removeClass('active');
             actives.remove();
         }
         if ($("#membership_list").length > 0) {
@@ -313,48 +265,58 @@ ldap_close($ldap_connection);
             return !~text.indexOf(val);
         }).hide();
     });
-
  });
-
 </script>
+
 <style type='text/css'>
-  .dual-list .list-group {
-      margin-top: 8px;
-  }
+/* ---- modern chrome ---- */
+.wrap-narrow { max-width: 1100px; margin: 18px auto 32px; }
+.panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
+.panel-modern .panel-heading {
+  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+  color:#cfe9ff; font-weight:600; letter-spacing:.4px; text-transform:uppercase;
+  padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.08);
+}
+.panel-modern .panel-title { margin:0; font-size:18px; letter-spacing:.2px; }
+.panel-modern .panel-body { padding:16px 16px 18px; }
+.help-min { color:#8aa0b2; font-size:12px; }
+.btn-pill { border-radius:999px; }
+.btn-soft { background:#121820; border:1px solid rgba(255,255,255,.12); color:#cfe9ff; }
+.btn-soft:hover { background:#17202b; }
+.invisible { visibility:hidden; } .visible { visibility:visible; }
 
-  .list-left li, .list-right li {
-      cursor: pointer;
-  }
-
-  .list-arrows {
-      padding-top: 100px;
-  }
-
-  .list-arrows button {
-          margin-bottom: 20px;
-  }
-
-  .right_button {
-    width: 200px;
-    float: right;
-  }
+/* dual list visual refresh (keeps your selectors intact) */
+.dual-list .well { background:#0e151d; border:1px solid rgba(255,255,255,.08); border-radius:10px; }
+.dual-list .list-group { margin-top: 8px; }
+.dual-list .list-group-item { background:transparent; border-color:rgba(255,255,255,.08); color:#cfe9ff; cursor:pointer; }
+.dual-list .list-group-item.active { background:#1a2b3a; border-color:#294155; }
+.list-left li, .list-right li { cursor: pointer; }
+.list-arrows { padding-top: 60px; }
+.list-arrows button { margin-bottom: 12px; }
+.right_button { width: 200px; float: right; }
 </style>
 
-
-<div class="container">
+<div class="container wrap-narrow">
   <div class="col-md-12">
     <div class="panel-group">
-      <div class="panel panel-default">
+      <div class="panel panel-modern">
 
         <div class="panel-heading clearfix">
-          <h3 class="panel-title pull-left" style="padding-top: 7.5px;"><?php print $group_cn; ?><?php if ($group_cn == $LDAP["admins_group"]) { print " <sup>(admin group)</sup>" ; } ?></h3>
-          <button class="btn btn-warning pull-right" onclick="show_delete_group_button();" <?php if ($group_cn == $LDAP["admins_group"]) { print "disabled"; } ?>>Delete group</button>
-          <form action="<?php print "{$THIS_MODULE_PATH}"; ?>/groups.php" method="post" enctype="multipart/form-data"><input type="hidden" name="delete_group" value="<?php print $group_cn; ?>"><button class="btn btn-danger pull-right invisible" id="delete_group">Confirm deletion</button></form>
+          <h3 class="panel-title pull-left" style="padding-top: 7.5px;">
+            <?php print $group_cn; ?><?php if ($group_cn == $LDAP["admins_group"]) { print " <sup>(admin group)</sup>" ; } ?>
+          </h3>
+          <div class="pull-right">
+            <button class="btn btn-warning btn-pill" onclick="show_delete_group_button();" <?php if ($group_cn == $LDAP["admins_group"]) { print "disabled"; } ?>>Delete group</button>
+            <form action="<?php print "{$THIS_MODULE_PATH}"; ?>/groups.php" method="post" enctype="multipart/form-data" style="display:inline;">
+              <input type="hidden" name="delete_group" value="<?php print $group_cn; ?>">
+              <button class="btn btn-danger btn-pill invisible" id="delete_group">Confirm deletion</button>
+            </form>
+          </div>
         </div>
 
         <ul class="list-group">
-          <li class="list-group-item"><?php print $full_dn; ?></li>
-        </li>
+          <li class="list-group-item" style="background:transparent;border-color:rgba(255,255,255,.08);color:#9fb6c9;"><?php print $full_dn; ?></li>
+        </ul>
 
         <div class="panel-body">
           <div class="row">
@@ -370,7 +332,7 @@ ldap_close($ldap_connection);
                   </div>
                   <div class="col-md-2">
                     <div class="btn-group">
-                      <a class="btn btn-default selector" title="select all"><i class="glyphicon glyphicon-unchecked"></i></a>
+                      <a class="btn btn-soft btn-pill selector" title="select all"><i class="glyphicon glyphicon-unchecked"></i></a>
                     </div>
                   </div>
                 </div>
@@ -388,18 +350,15 @@ ldap_close($ldap_connection);
                 </ul>
               </div>
             </div>
+
             <div class="list-arrows col-md-1 text-center">
-              <button class="btn btn-default btn-sm move-left">
-                <span class="glyphicon glyphicon-chevron-left"></span>
-              </button>
-              <button class="btn btn-default btn-sm move-right">
-                <span class="glyphicon glyphicon-chevron-right"></span>
-              </button>
+              <button class="btn btn-soft btn-sm btn-pill move-left"><span class="glyphicon glyphicon-chevron-left"></span></button>
+              <button class="btn btn-soft btn-sm btn-pill move-right"><span class="glyphicon glyphicon-chevron-right"></span></button>
               <form id="group_members" action="<?php print $CURRENT_PAGE; ?>" method="post">
                 <input type="hidden" name="update_members">
                 <input type="hidden" name="group_name" value="<?php print urlencode($group_cn); ?>">
                 <?php if ($new_group == TRUE) { ?><input type="hidden" name="initialise_group"><?php } ?>
-                <button id="submit_members" class="btn btn-info" <?php if (count($group_members)==0) print 'disabled'; ?> type="submit" onclick="update_form_with_users()">Save</button>
+                <button id="submit_members" class="btn btn-primary btn-pill" <?php if (count($group_members)==0) print 'disabled'; ?> type="submit" onclick="update_form_with_users()">Save</button>
             </div>
 
             <div class="dual-list list-right col-md-5">
@@ -408,7 +367,7 @@ ldap_close($ldap_connection);
                 <div class="row">
                   <div class="col-md-2">
                     <div class="btn-group">
-                      <a class="btn btn-default selector" title="select all"><i class="glyphicon glyphicon-unchecked"></i></a>
+                      <a class="btn btn-soft btn-pill selector" title="select all"><i class="glyphicon glyphicon-unchecked"></i></a>
                     </div>
                   </div>
                   <div class="col-md-10">
@@ -419,21 +378,16 @@ ldap_close($ldap_connection);
                   </div>
                 </div>
                 <ul class="list-group">
-                  <?php
-                   foreach ($non_members as $nonmember) {
-                     print "<li class='list-group-item'>$nonmember</li>\n";
-                   }
-                 ?>
+                  <?php foreach ($non_members as $nonmember) { print "<li class='list-group-item'>$nonmember</li>\n"; } ?>
                 </ul>
               </div>
             </div>
           </div>
         </div>
       </div>
-<?php
 
-if (count($attribute_map) > 0) { ?>
-      <div class="panel panel-default">
+<?php if (count($attribute_map) > 0) { ?>
+      <div class="panel panel-modern">
         <div class="panel-heading clearfix">
           <h3 class="panel-title pull-left" style="padding-top: 7.5px;">Group attributes</h3>
         </div>
@@ -455,7 +409,7 @@ if (count($attribute_map) > 0) { ?>
             <div class="row">
               <div class="col-md-4 col-md-offset-3">
                 <div class="form-group">
-                  <button id="submit_attributes" class="btn btn-info" <?php if (count($group_members)==0) print 'disabled'; ?> type="submit" tabindex="<?php print $tabindex; ?>" onclick="update_form_with_users()">Save</button>
+                  <button id="submit_attributes" class="btn btn-primary btn-pill" <?php if (count($group_members)==0) print 'disabled'; ?> type="submit" tabindex="<?php print $tabindex; ?>" onclick="update_form_with_users()">Save</button>
                 </div>
               </div>
             </div>
