@@ -183,15 +183,21 @@ if (!$uid) json_fail('Not authenticated', 401);
 if (!in_array('mtls', $groups, true)) json_fail('Not in mtls group', 403);
 
 // ---------- Storage paths ----------
-$APP_ROOT = realpath(dirname(__DIR__, 2));   // e.g. /opt/ldap_user_manager
+$APP_ROOT = dirname(__DIR__);              // -> /opt/ldap_user_manager
 $DATA     = $APP_ROOT . '/data/mtls';
 $CODES    = $DATA . '/codes';
 $TOKENS   = $DATA . '/tokens';
 $LOGS     = $DATA . '/logs';
 
-@mkdir($CODES, 0775, true);
-@mkdir($TOKENS, 0775, true);
-@mkdir($LOGS, 0775, true);
+function ensure_dir(string $d) {
+  if (is_dir($d)) return;
+  if (!@mkdir($d, 0775, true) && !is_dir($d)) {
+    json_fail("Cannot create directory: $d", 500);
+  }
+}
+ensure_dir($CODES);
+ensure_dir($TOKENS);
+ensure_dir($LOGS);
 
 // ---------- Config ----------
 $MAIL_FROM      = getenv('MTLS_MAIL_FROM') ?: (getenv('EMAIL_FROM_ADDRESS') ?: 'no-reply@localhost');
