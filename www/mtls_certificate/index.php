@@ -113,25 +113,56 @@ render_header("mTLS Certificate");
       area.innerHTML = '';
       const a = document.createElement('a');
       a.href = 'mtls_download.php?token=' + encodeURIComponent(j.token);
-      a.textContent = 'Download certificate (valid 5 minutes, single-use)';
+      a.textContent = 'Download certificate (valid a few minutes, single-use)';
       a.className = 'btn btn-warning';
       area.appendChild(a);
 
-      // Expiry hint
+      // 1s cooldown to discourage instant click
+      a.classList.add('disabled');
+      a.setAttribute('aria-disabled', 'true');
+      a.style.pointerEvents = 'none';
+      a.style.opacity = '0.7';
+      setTimeout(() => {
+        a.classList.remove('disabled');
+        a.removeAttribute('aria-disabled');
+        a.style.pointerEvents = '';
+        a.style.opacity = '';
+      }, 1000);
+
+      // Expiry hint: poll token_info (host stager will fill expires_days)
       const hint = q('#expiry-hint');
-      if (typeof j.expires_days === 'number') {
-        const d = j.expires_days;
-        if (d < 0) {
-          hint.textContent = 'Certificate appears expired.';
-          hint.className = 'text-danger';
-        } else {
-          hint.textContent = 'Your current certificate expires in about ' + d + ' day' + (d===1?'':'s') + '.';
-          hint.className = 'text-muted';
+      hint.textContent = 'Determining certificate expiry…';
+      hint.className = 'text-muted';
+
+      const token = j.token;
+      let tries = 0;
+      (async function pollExpiry(){
+        try {
+          const r2 = await fetch('mtls_api.php?action=token_info', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({csrf, token})
+          });
+          const j2 = await r2.json();
+          if (r2.ok && j2.ok && typeof j2.expires_days === 'number') {
+            const d = j2.expires_days;
+            if (d < 0) {
+              hint.textContent = 'Certificate appears expired.';
+              hint.className = 'text-danger';
+            } else {
+              hint.textContent = 'Your current certificate expires in about ' + d + ' day' + (d===1?'':'s') + '.';
+              hint.className = 'text-muted';
+            }
+            return;
+          }
+        } catch(_) {}
+
+        if (++tries < 10) setTimeout(pollExpiry, 1000);
+        else {
+          hint.textContent = 'Expiry could not be determined.';
+          hint.className = 'text-warning';
         }
-      } else {
-        hint.textContent = 'Expiry could not be determined.';
-        hint.className = 'text-warning';
-      }
+      })();
 
       msg(s, 'Verified. Token issued.', 'success');
     } catch(e) {
