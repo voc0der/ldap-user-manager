@@ -4,7 +4,18 @@ set_include_path('.:' . __DIR__ . '/../includes/');
 include_once 'web_functions.inc.php';
 @session_start();
 
-// ----- Helpers -----
+/**
+ * mtls_download.php
+ * - Validates single-use token
+ * - Marks it used
+ * - Hands file delivery to SWAG via X-Accel-Redirect
+ * - Sends a styled Apprise notification with a tag
+ *
+ * NOTE: This version assumes SWAG serves from a per-token staged path:
+ *       /_protected_mtls/<sha256(token)>/client.p12  ->  /mtls_stage/<sha256(token)>/client.p12
+ */
+
+// ---------- Helpers ----------
 function h(string $k): ?string {
   $k = 'HTTP_' . strtoupper(str_replace('-', '_', $k));
   return isset($_SERVER[$k]) ? trim((string)$_SERVER[$k]) : null;
@@ -15,7 +26,6 @@ function hard_fail(int $code, string $msg){
   echo $msg;
   exit;
 }
-// Apprise (multipart -F), defaults tag to matrix_group_system_alerts or APPRISE_TAG
 function mtls_apprise_notify(string $body, ?string $tag = null): void {
   $url = getenv('APPRISE_URL');
   if (!$url) return;
@@ -28,22 +38,22 @@ function mtls_apprise_notify(string $body, ?string $tag = null): void {
   @exec($cmd);
 }
 
-// ----- AuthZ via Authelia headers -----
+// ---------- AuthZ (Authelia) ----------
 $uid    = h('Remote-User') ?: ($_SESSION['uid'] ?? null);
 $groups = preg_split('/[;,\s]+/', (string)(h('Remote-Groups') ?? ''));
-if (!$uid || !in_array('mtls', array_map('trim', $groups), true)) hard_fail(403, 'Forbidden');
+if (!$uid || !in_array('mtls', array_map('trim',$groups), true)) hard_fail(403, 'Forbidden');
 
-// ----- Token param -----
+// ---------- Input ----------
 $token = isset($_GET['token']) ? (string)$_GET['token'] : '';
 if (!preg_match('/^[a-f0-9]{48}$/', $token)) hard_fail(400, 'Bad token');
 
-// ----- Storage paths -----
-$APP_ROOT = dirname(__DIR__);                   // -> /opt/ldap_user_manager
+// ---------- Paths ----------
+$APP_ROOT = dirname(__DIR__);        // /opt/ldap_user_manager
 $DATA     = $APP_ROOT . '/data/mtls';
 $TOKENS   = $DATA . '/tokens';
 $LOGS     = $DATA . '/logs';
 
-// ----- Token lookup -----
+// ---------- Validate token ----------
 $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
 if (!file_exists($tfile)) hard_fail(400, 'Invalid or used token');
 
@@ -53,47 +63,41 @@ if (($rec['exp'] ?? 0) < time()) { @unlink($tfile); hard_fail(400, 'Token expire
 if (!hash_equals((string)($rec['session'] ?? ''), session_id())) hard_fail(400, 'Session mismatch');
 if (!empty($rec['used'])) hard_fail(400, 'Already used');
 
-// ----- Resolve artifact (served by Nginx via X-Accel-Redirect) -----
-$CERT_BASE = getenv('MTLS_CERT_BASE') ?: '/mnt/mtls-certs'; // internal mount, not web-exposed
-$cert_dir  = $CERT_BASE . '/' . preg_replace('/[^a-zA-Z0-9_.-]/', '_', $uid);
-$artifact  = $cert_dir . '/client.p12'; // adapt if you change staged filename
-
-if (!is_file($artifact)) {
-  hard_fail(404, 'Certificate not found for user');
-}
-
-// ----- Mark token used (atomic-ish) -----
+// ---------- Mark token used (atomic-ish) ----------
 $rec['used'] = true;
 file_put_contents($tfile, json_encode($rec), LOCK_EX);
 @rename($tfile, $tfile . '.used');
 
-// ----- Headers for internal sendfile -----
-$opaque = '/_protected_mtls/' . rawurlencode($uid) . '/client.p12';
+// ---------- Hand off to SWAG (per-token staging) ----------
+$token_hash = hash('sha256', $token);
+$opaque     = '/_protected_mtls/' . $token_hash . '/client.p12';
+
 header('Content-Type: application/octet-stream');
 header('X-Accel-Redirect: ' . $opaque);
-header('Content-Disposition: attachment; filename="mtls-' . basename($artifact) . '"');
+header('Content-Disposition: attachment; filename="mtls-client.p12"');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 
-// ----- Log -----
+// ---------- Log ----------
 $evt = [
-  'evt'      => 'download',
-  'uid'      => $uid,
-  'ip'       => ($_SERVER['REMOTE_ADDR'] ?? ''),
-  'ua'       => ($_SERVER['HTTP_USER_AGENT'] ?? ''),
-  't'        => time(),
-  'artifact' => $artifact
+  'evt'    => 'download',
+  'uid'    => $uid,
+  'ip'     => ($_SERVER['REMOTE_ADDR'] ?? ''),
+  'ua'     => ($_SERVER['HTTP_USER_AGENT'] ?? ''),
+  't'      => time(),
+  'opaque' => $opaque,
 ];
 @file_put_contents($LOGS . '/events.log', json_encode($evt) . "\n", FILE_APPEND);
 
-// ----- Apprise notify (styled, tagged) -----
+// ---------- Apprise (styled + tagged) ----------
 $host = $_SERVER['HTTP_HOST'] ?? php_uname('n') ?? 'host';
 $ip   = $_SERVER['REMOTE_ADDR'] ?? '';
 $ua   = $_SERVER['HTTP_USER_AGENT'] ?? '';
-$body = '🔐 `' . $host . '` **mTLS Cert Downloaded**:<br />'
-      . 'User: <code>' . htmlspecialchars($uid, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
-      . 'IP: <code>'   . htmlspecialchars($ip,  ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
-      . 'UA: <code>'   . htmlspecialchars($ua,  ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+$body = '🔐 `' . $host . '` **mTLS Download**:<br />'
+      . 'User: <code>' . htmlspecialchars($uid, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+      . 'IP: <code>'   . htmlspecialchars($ip,  ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+      . 'Token: <code>' . substr($token_hash, 0, 8) . '…</code><br />'
+      . 'UA: <code>'   . htmlspecialchars($ua,  ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code>';
 mtls_apprise_notify($body);
 
-exit; // Nginx serves the file via X-Accel-Redirect
+exit; // SWAG serves the file via X-Accel-Redirect
