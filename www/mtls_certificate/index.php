@@ -50,7 +50,34 @@ render_header("mTLS Certificate");
 .btn-inline-gap {margin-left:8px}
 a.btn.disabled, .btn[aria-disabled="true"] {opacity:.55;}
 #dl-area a.btn {white-space:normal}
-#verify-form .form-control {width:170px;}
+/* Keep code + Verify + status on one line (even on mobile) */
+#verify-form {
+  display: flex !important;           /* override BS3's mobile stacking */
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;                  /* prevent line wrap */
+}
+/* Let the code field shrink a bit on smaller screens but cap it on large ones */
+#verify-form #code {
+  width: clamp(108px, 38vw, 170px);
+  min-width: 0;
+  flex: 0 0 auto;
+}
+/* Keep the button compact and non-wrapping */
+#btn-verify {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* Status takes the remaining space and truncates if long */
+#verify-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Make sure no other fixed width sneaks in */
+#verify-form .form-control { width: auto; }
 #send-status, #verify-status, #expiry-hint {min-height:20px}
 </style>
 
