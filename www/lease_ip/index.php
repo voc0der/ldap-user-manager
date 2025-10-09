@@ -35,14 +35,32 @@ render_header('Lease IP');
   padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.08);
 }
 .panel-modern .panel-body { padding:14px; }
+
 .table-modern { margin:0; }
 .table-modern>thead>tr>th,
 .table-modern>tbody>tr>td,
-.table-modern tfoot td {
-  border-color: rgba(255,255,255,.08);
+.table-modern tfoot td { border-color: rgba(255,255,255,.08); }
+
+.table-modern>thead>tr>th {
+  color:#9fb6c9; font-size:12px; text-transform:uppercase; letter-spacing:.35px; border-bottom-width:1px;
 }
-.table-modern>thead>tr>th { color:#9fb6c9; font-size:12px; text-transform:uppercase; letter-spacing:.35px; border-bottom-width:1px; }
-.table-modern>tbody>tr:hover td { background:rgba(255,255,255,.02); }
+
+/* Zebra striping to match Users/Groups pages */
+.table-modern.table-striped>tbody>tr:nth-of-type(odd)  { background: rgba(255,255,255,.03); }
+.table-modern.table-striped>tbody>tr:nth-of-type(even) { background: rgba(255,255,255,.015); }
+
+/* Hover */
+.table-modern>tbody>tr:hover td { background: rgba(255,255,255,.06); }
+
+/* Stronger stripes on small screens so it doesn’t look flat */
+@media (max-width: 768px) {
+  .panel-modern .panel-body { padding:12px; }
+  .table-modern.table-striped>tbody>tr:nth-of-type(odd)  { background: rgba(255,255,255,.06); }
+  .table-modern.table-striped>tbody>tr:nth-of-type(even) { background: rgba(255,255,255,.03); }
+  .table-modern>tbody>tr:hover td { background: rgba(255,255,255,.09); }
+  .table-modern>tbody>tr>td, .table-modern>thead>tr>th { padding:10px 8px; }
+}
+
 .badge-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-family:monospace; font-size:.95em;
   background:#1a2b3a; color:#a9e1ff; border:1px solid rgba(127,209,255,.35); }
 .smallprint, .help-note { color:#8aa0b2; font-size:12px; }
@@ -52,10 +70,12 @@ render_header('Lease IP');
 .btn-primary.btn-pill { background:#2a8bdc; border-color:#2a8bdc; }
 .btn-danger.btn-pill { background:#cf4444; border-color:#cf4444; }
 .btn-muted { background:transparent; border:1px solid rgba(255,255,255,.12); color:#9fb6c9; }
+
 .header-inline { display:flex; align-items:center; gap:12px; }
 .header-inline .grow { flex:1; }
 .header-title { font-size:13px; letter-spacing:.35px; }
-.header-count { color:#9fb6c9; font-weight:500; margin-left:8px; }
+.header-count { color:#9fb6c9; font-weight:600; margin-left:8px; letter-spacing:.6px; }
+
 tfoot td { background:rgba(255,255,255,.02); }
 .input-slim { max-width: 22rem; }
 .control-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -70,7 +90,8 @@ td.text-right .btn { margin-left:6px; }
     <div class="panel-heading text-center header-title">LEASE IP (INTERNAL)</div>
     <div class="panel-body">
       <div class="table-responsive">
-        <table class="table table-modern">
+        <!-- add table-striped -->
+        <table class="table table-striped table-modern">
           <tbody>
           <tr>
             <td>Detected client IP</td>
@@ -109,7 +130,8 @@ td.text-right .btn { margin-left:6px; }
     </div>
     <div class="panel-body">
       <div class="table-responsive">
-        <table class="table table-modern">
+        <!-- add table-striped -->
+        <table class="table table-striped table-modern">
           <thead>
           <tr>
             <th>Label</th>
