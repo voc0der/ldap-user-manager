@@ -1,5 +1,5 @@
 <?php
-// change_password/index.php (modernized)
+// change_password/index.php (modernized, single global min length)
 
 set_include_path(".:" . __DIR__ . "/../includes/");
 include_once "web_functions.inc.php";
@@ -7,10 +7,8 @@ include_once "ldap_functions.inc.php";
 
 set_page_access("user");
 
-// ---- Policy (adjust as you like) ----
+// ---- Policy (global) ----
 const DEFAULT_MIN_LEN = 12;
-const ADMIN_MIN_LEN   = 15;
-const NO_MFA_MIN_LEN  = 15;
 const MAX_LEN         = 256;
 
 // Multibyte length helper (count Unicode code points)
@@ -20,16 +18,9 @@ function pw_len(string $s): int {
 }
 
 @session_start();
-global $IS_ADMIN, $USER_ID;
-$is_admin = isset($IS_ADMIN) ? (bool)$IS_ADMIN : (!empty($_SESSION['is_admin']));
-$has_mfa  = true;
-if (function_exists('user_has_mfa')) {
-    try { $has_mfa = (bool)user_has_mfa($USER_ID); } catch (Throwable $e) { $has_mfa = true; }
-}
+global $USER_ID;
 
 $min_len = DEFAULT_MIN_LEN;
-if ($is_admin)  $min_len = max($min_len, ADMIN_MIN_LEN);
-if (!$has_mfa)  $min_len = max($min_len, NO_MFA_MIN_LEN);
 
 // ---- POST handling ----
 if (isset($_POST['change_password'])) {
@@ -113,11 +104,8 @@ if (isset($too_long))     $alerts[] = "Password is too long. Maximum length is "
 
       <div class="policy-box help-min">
         <strong>Policy.</strong>
-        Minimum <strong><?php echo (int)$min_len; ?></strong> characters<?php
-          if ($is_admin || !$has_mfa) {
-            echo " (admins &amp; no-MFA accounts: <strong>" . (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN) . "+</strong>)";
-          }
-        ?>; maximum <strong><?php echo (int)MAX_LEN; ?></strong>. No composition rules—any characters allowed (spaces & full Unicode). Paste from your password manager is encouraged.
+        Minimum <strong><?php echo (int)$min_len; ?></strong> characters; maximum <strong><?php echo (int)MAX_LEN; ?></strong>.
+        No composition rules—any characters allowed (spaces &amp; full Unicode). Paste from your password manager is encouraged.
       </div>
 
       <form class="form-horizontal" action="" method="post" autocomplete="off" novalidate>
