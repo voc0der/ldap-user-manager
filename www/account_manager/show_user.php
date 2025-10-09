@@ -1,5 +1,5 @@
 <?php
-// www/account_manager/show_user.php  (modernized styling, same logic)
+// www/account_manager/show_user.php  (modernized styling, single global policy)
 
 set_include_path(".:" . __DIR__ . "/../includes/");
 
@@ -8,10 +8,8 @@ include_once "ldap_functions.inc.php";
 include_once "module_functions.inc.php";
 set_page_access("admin");
 
-// ---- Password Policy ----
+// ---- Password Policy (global) ----
 const DEFAULT_MIN_LEN = 12;
-const ADMIN_MIN_LEN   = 15;
-const NO_MFA_MIN_LEN  = 15;
 const MAX_LEN         = 256;
 
 function pw_len(string $s): int {
@@ -113,18 +111,10 @@ if ($ldap_search) {
     exit(0);
   }
 
-  // ---- Determine policy for this target account (admin? MFA?) ----
+  // ---- Determine policy for this target account (global min only) ----
+  // Still fetch groups for the membership UI, but password policy is global.
   $target_groups = ldap_user_group_membership($ldap_connection, $account_identifier);
-  $target_is_admin = in_array($LDAP['admins_group'], $target_groups);
-
-  $has_mfa = true;
-  if (function_exists('user_has_mfa')) {
-    try { $has_mfa = (bool)user_has_mfa($account_identifier); } catch (Throwable $e) { $has_mfa = true; }
-  }
-
   $min_len = DEFAULT_MIN_LEN;
-  if ($target_is_admin) $min_len = max($min_len, ADMIN_MIN_LEN);
-  if (!$has_mfa)        $min_len = max($min_len, NO_MFA_MIN_LEN);
 
   // ---- Updates ----
   if (isset($_POST['update_account'])) {
@@ -310,6 +300,7 @@ document.addEventListener('DOMContentLoaded', updateMeter);
 
 <style type='text/css'>
 /* ---------- modern chrome ---------- */
+.wrap-narrow { max_width: 1100px; margin: 18px auto 32px; } /* keep underscore? using hyphen instead */
 .wrap-narrow { max-width: 1100px; margin: 18px auto 32px; }
 .panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
 .panel-modern .panel-heading {
@@ -374,9 +365,7 @@ document.addEventListener('DOMContentLoaded', updateMeter);
                    maxlength="<?php echo (int)MAX_LEN; ?>"
                    oninput="back_to_hidden('password','confirm'); check_if_we_should_enable_sending_email(); updateMeter();">
             <div class="help-min text-left" style="margin-top:6px;">
-              Policy: minimum <strong><?php echo (int)$min_len; ?></strong> characters<?php
-                if ($target_is_admin || !$has_mfa) { echo " (admins &amp; accounts without MFA: <strong>" . (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN) . "+</strong>)"; }
-              ?>; maximum <strong><?php echo (int)MAX_LEN; ?></strong>. No composition rules.
+              Policy: minimum <strong><?php echo (int)$min_len; ?></strong> characters; maximum <strong><?php echo (int)MAX_LEN; ?></strong>. No composition rules.
             </div>
           </div>
           <div class="col-sm-3">
