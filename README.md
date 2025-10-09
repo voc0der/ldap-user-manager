@@ -14,6 +14,8 @@ A fork of **wheelybird/ldap-user-manager** with reverse‑proxy auth header supp
 - **Lease IP:** a small UI/API pair that lets users/admins add/remove client IPs to SWAG’s `ip-lease.conf` (with static entries, prune, etc.).
 - **Hardening:** per‑user rate limiting, CSRF, session‑bound tokens, explicit permissions, and internal nginx delivery path.
 
+
+TBD: OIDC
 ---
 
 ## Reverse‑proxy auth headers
