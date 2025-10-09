@@ -78,6 +78,37 @@ a.btn.disabled, .btn[aria-disabled="true"] {opacity:.55;}
 }
 /* Make sure no other fixed width sneaks in */
 #verify-form .form-control { width: auto; }
+/* Keep "code + Verify + status" on one line on all viewports */
+#verify-form { 
+  white-space: nowrap;              /* prevent line wrap */
+}
+/* Override BS3 block/100% width just for this form */
+#verify-form .form-control,
+#verify-form .btn {
+  display: inline-block !important; /* force inline layout */
+  width: auto !important;           /* undo BS3 100% width */
+  vertical-align: middle;
+}
+/* Give the code field a sensible fixed-ish width that still shrinks on tiny screens */
+#verify-form #code {
+  width: 11ch;                      /* ~8 digits + padding/placeholder room */
+  max-width: 40vw;                  /* allow some shrink on very small screens */
+  min-width: 8ch;
+}
+/* Status stays on the same line and truncates if long */
+#verify-status {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 8px;
+  max-width: 50%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Optional: hide status on ultra-narrow devices to avoid crowding */
+@media (max-width: 360px) {
+  #verify-status { display: none; }
+}
 #send-status, #verify-status, #expiry-hint {min-height:20px}
 </style>
 
