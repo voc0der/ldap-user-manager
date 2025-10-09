@@ -321,54 +321,108 @@ function format_module_label($module) {
 }
 
 ######################################################
-
 function render_menu() {
+  // Render the navigation menu (Bootstrap 3)
+  global $SITE_NAME, $MODULES, $THIS_MODULE, $VALIDATED, $IS_ADMIN, $USER_ID, $SERVER_PATH, $CUSTOM_LOGO;
 
- #Render the navigation menu.
- #The menu is dynamically rendered the $MODULES hash
-
- global $SITE_NAME, $MODULES, $THIS_MODULE, $VALIDATED, $IS_ADMIN, $USER_ID, $SERVER_PATH, $CUSTOM_LOGO;
-
- ?>
+  ?>
   <nav class="navbar navbar-default">
-   <div class="container-fluid">
-   <div class="navbar-header"><?php
-      if ($CUSTOM_LOGO) echo '<span class="navbar-brand"><img src="'.$CUSTOM_LOGO.'" class="logo" alt="logo"></span>'
-     ?><a class="navbar-brand" href="./"><?php print $SITE_NAME ?></a>
-   </div>
-     <ul class="nav navbar-nav">
-     <?php
-     foreach ($MODULES as $module => $access) {
+    <div class="container-fluid">
 
-      $this_module_name = format_module_label(stripslashes($module));
+      <!-- Brand + hamburger -->
+      <div class="navbar-header">
+        <button type="button"
+                class="navbar-toggle collapsed"
+                data-toggle="collapse"
+                data-target="#main-navbar"
+                aria-expanded="false"
+                aria-controls="main-navbar">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+        </button>
 
-      $show_this_module = TRUE;
-      if ($VALIDATED == TRUE) {
-       if ($access == 'hidden_on_login' && $access != 'always') { $show_this_module = FALSE; }
-       if ($IS_ADMIN == FALSE and $access == 'admin' && $access != 'always'){ $show_this_module = FALSE; }
-      }
-      else {
-       if ($access != 'hidden_on_login' && $access != 'always') { $show_this_module = FALSE; }
-      }
-      #print "<p>$module - access is $access & show is $show_this_module</p>";
-      if ($show_this_module == TRUE ) {
-       if ($module == $THIS_MODULE) {
-        print "<li class='active'>";
-       }
-       else {
-        print '<li>';
-       }
-       print "<a href='{$SERVER_PATH}{$module}/'>$this_module_name</a></li>\n";
-      }
-     }
-     ?>
-     </ul>
-     <ul class="nav navbar-nav navbar-right">
-      <li><a style="color: #00ffee;text-shadow: 0 0 5px #00ffee, 0 0 10px #00ffee;"><?php if(isset($USER_ID)) { print $USER_ID; } ?></a></li>
-     </ul>
-   </div>
+        <?php if ($CUSTOM_LOGO) { ?>
+          <a class="navbar-brand" href="./">
+            <img src="<?php echo $CUSTOM_LOGO; ?>" class="logo" alt="logo">
+          </a>
+        <?php } ?>
+        <a class="navbar-brand" href="./"><?php echo $SITE_NAME; ?></a>
+      </div>
+
+      <!-- Collapsible nav -->
+      <div id="main-navbar" class="collapse navbar-collapse">
+
+        <ul class="nav navbar-nav">
+          <?php
+          foreach ($MODULES as $module => $access) {
+            $this_module_name = format_module_label(stripslashes($module));
+
+            $show = true;
+            if ($VALIDATED) {
+              if ($access == 'hidden_on_login' && $access != 'always') $show = false;
+              if (!$IS_ADMIN && $access == 'admin' && $access != 'always') $show = false;
+            } else {
+              if ($access != 'hidden_on_login' && $access != 'always') $show = false;
+            }
+            if ($show) {
+              $active = ($module == $THIS_MODULE) ? "class='active'" : "";
+              echo "<li $active><a href='{$SERVER_PATH}{$module}/'>{$this_module_name}</a></li>\n";
+            }
+          }
+          ?>
+        </ul>
+
+        <!-- Right side: user dropdown. On mobile the username text is hidden; only the icon shows -->
+        <ul class="nav navbar-nav navbar-right">
+          <?php if (!empty($USER_ID)) { ?>
+          <li class="dropdown">
+            <a href="#"
+               class="dropdown-toggle user-label"
+               data-toggle="dropdown"
+               role="button"
+               aria-haspopup="true"
+               aria-expanded="false"
+               title="<?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?>">
+              <span class="glyphicon glyphicon-user" aria-hidden="true"></span>
+              <span class="hidden-xs" style="color:#00ffee;text-shadow:0 0 5px #00ffee,0 0 10px #00ffee;">
+                <?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?>
+              </span>
+              <span class="caret"></span>
+            </a>
+            <ul class="dropdown-menu">
+              <li class="dropdown-header">
+                Signed in as <strong><?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?></strong>
+              </li>
+              <li role="separator" class="divider"></li>
+              <li><a href="<?php echo $SERVER_PATH; ?>change_password/">Change Password</a></li>
+              <?php if ($IS_ADMIN) { ?>
+                <li><a href="<?php echo $SERVER_PATH; ?>account_manager/">Account Manager</a></li>
+              <?php } ?>
+              <li><a href="<?php echo $SERVER_PATH; ?>lease_ip/">Lease IP</a></li>
+              <li><a href="<?php echo $SERVER_PATH; ?>mtls_certificate/">mTLS Certificate</a></li>
+              <li role="separator" class="divider"></li>
+              <!-- If you have a dedicated logout route, update this href accordingly -->
+              <li><a href="<?php echo $SERVER_PATH; ?>log_in/index.php?logout">Log out</a></li>
+            </ul>
+          </li>
+          <?php } ?>
+        </ul>
+
+      </div>
+    </div>
   </nav>
- <?php
+
+  <!-- tiny navbar tweaks -->
+  <style>
+    .navbar-brand .logo { max-height:22px; display:inline-block; margin-top:-2px; }
+    @media (max-width: 767px) {
+      /* tighter padding for the icon-only user button on phones */
+      .navbar-nav > li > a.user-label { padding-left:12px; padding-right:12px; }
+    }
+  </style>
+  <?php
 }
 
 
