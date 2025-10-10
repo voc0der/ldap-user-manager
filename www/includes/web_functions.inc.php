@@ -17,6 +17,9 @@ $GOOD_ICON = "&#9745;";
 $WARN_ICON = "&#9888;";
 $FAIL_ICON = "&#9940;";
 
+// Customizable external links
+$MFA_SETTINGS_URL = getenv('MFA_SETTINGS_URL') ?: '';
+
 $JS_EMAIL_REGEX='/^(([^<>()[\]\\.,;:\s@\"]+(\.[^<>()[\]\\.,;:\s@\"]+)*)|(\".+\"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;';
 
 if (isset($_SERVER['HTTPS']) and
@@ -324,7 +327,7 @@ function format_module_label($module) {
 
 function render_menu() {
   // Bootstrap 3 navbar w/ hamburger + simple username label (no dropdown)
-  global $SITE_NAME, $MODULES, $THIS_MODULE, $VALIDATED, $IS_ADMIN, $USER_ID, $SERVER_PATH, $CUSTOM_LOGO;
+  global $SITE_NAME, $MODULES, $THIS_MODULE, $VALIDATED, $IS_ADMIN, $USER_ID, $SERVER_PATH, $CUSTOM_LOGO, $MFA_SETTINGS_URL;
 
   ?>
   <nav class="navbar navbar-default">
@@ -373,6 +376,12 @@ function render_menu() {
             }
           }
           ?>
+
+           <?php if (!empty($MFA_SETTINGS_URL) && $VALIDATED) { ?>
+             <li>
+               <a href="<?php echo htmlspecialchars($MFA_SETTINGS_URL, ENT_QUOTES, 'UTF-8'); ?>">MFA Settings</a>
+             </li>
+           <?php } ?>
         </ul>
 
         <!-- Right side: just the username (no dropdown, no icon) -->
