@@ -50,35 +50,19 @@ render_header("mTLS Certificate");
 .btn-inline-gap {margin-left:8px}
 a.btn.disabled, .btn[aria-disabled="true"] {opacity:.55;}
 #dl-area a.btn {white-space:normal}
+
 /* Keep code + Verify + status on one line (even on mobile) */
-#verify-form {
-  display: flex !important;           /* override BS3's mobile stacking */
-  align-items: center;
-  gap: 8px;
-  flex-wrap: nowrap;                  /* prevent line wrap */
-}
-/* Let the code field shrink a bit on smaller screens but cap it on large ones */
-#verify-form #code {
-  width: clamp(108px, 38vw, 170px);
-  min-width: 0;
-  flex: 0 0 auto;
-}
-/* Keep the button compact and non-wrapping */
-#btn-verify {
-  white-space: nowrap;
-  flex: 0 0 auto;
-}
-/* Status takes the remaining space and truncates if long */
-#verify-status {
-  flex: 1 1 auto;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* Make sure no other fixed width sneaks in */
-#verify-form .form-control { width: auto; }
+#verify-form { display:flex !important; align-items:center; gap:8px; flex-wrap:nowrap; }
+#verify-form #code { width: clamp(108px, 38vw, 170px); min-width:0; flex:0 0 auto; }
+#btn-verify { white-space:nowrap; flex:0 0 auto; }
+#verify-status { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#verify-form .form-control { width:auto; }
 #send-status, #verify-status, #expiry-hint {min-height:20px}
+
+/* Password pill */
+.pw-pill { display:inline-flex; align-items:center; gap:.5rem; background:#121212; border:1px solid rgba(255,255,255,.14); border-radius:8px; padding:.35rem .5rem; }
+.pw-pill code { margin:0; padding:0 .2rem; background:transparent; color:#e8f0fe; }
+.pw-btn { padding:.25rem .5rem; font-size:12px; }
 </style>
 
 <div class="container" style="max-width:720px; margin-top:20px">
@@ -156,8 +140,55 @@ a.btn.disabled, .btn[aria-disabled="true"] {opacity:.55;}
     }
   }
 
-  async function pollTokenInfo(token){
+  // Render expiry + password into the hint block
+  function renderHint(days, pass) {
     const hint = q('#expiry-hint');
+    let parts = [];
+
+    if (typeof days === 'number') {
+      if (days < 0) {
+        parts.push('<span class="text-danger">Certificate appears expired.</span>');
+      } else {
+        parts.push('<span class="text-muted">Your current certificate expires in about ' + days + ' day' + (days===1?'':'s') + '.</span>');
+      }
+    } else {
+      parts.push('<span class="text-warning">Expiry could not be determined.</span>');
+    }
+
+    if (typeof pass === 'string' && pass.length > 0) {
+      const escaped = pass.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      parts.push(
+        '<span class="pw-pill" style="margin-left:.6rem">' +
+          '<strong>PKCS#12 password:</strong> ' +
+          '<code id="p12-pass-val">' + escaped + '</code>' +
+          '<button type="button" id="btn-copy-pass" class="btn btn-default btn-xs pw-btn">Copy</button>' +
+        '</span>'
+      );
+    } else {
+      parts.push('<span class="text-warning" style="margin-left:.6rem">PKCS#12 password not available.</span>');
+    }
+
+    hint.innerHTML = parts.join(' ');
+    // Bind copy handler if present
+    const copyBtn = q('#btn-copy-pass');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        const valNode = q('#p12-pass-val');
+        if (!valNode) return;
+        const txt = valNode.textContent || '';
+        try {
+          await navigator.clipboard.writeText(txt);
+          copyBtn.textContent = 'Copied';
+          setTimeout(()=> copyBtn.textContent='Copy', 1200);
+        } catch(_e) {
+          // Fallback prompt
+          window.prompt('Copy password:', txt);
+        }
+      });
+    }
+  }
+
+  async function pollTokenInfo(token){
     for (let i=0; i<POLL_MAX; i++){
       try {
         const r = await fetch('mtls_api.php?action=token_info', {
@@ -167,23 +198,13 @@ a.btn.disabled, .btn[aria-disabled="true"] {opacity:.55;}
         });
         const j = await r.json();
         if (r.ok && j.ok) {
-          if (typeof j.expires_days === 'number') {
-            const d = j.expires_days;
-            if (d < 0) {
-              hint.textContent = 'Certificate appears expired.';
-              hint.className = 'text-danger help-min';
-            } else {
-              hint.textContent = 'Your current certificate expires in about ' + d + ' day' + (d===1?'':'s') + '.';
-              hint.className = 'text-muted help-min';
-            }
-            return;
-          }
+          renderHint(j.expires_days, j.p12_pass || null);
+          return;
         }
       } catch(e) { /* keep polling */ }
       await new Promise(res => setTimeout(res, POLL_DELAY_MS));
     }
-    hint.textContent = 'Expiry could not be determined.';
-    hint.className = 'text-warning help-min';
+    renderHint(null, null);
   }
 
   // Initial state: only step 1 enabled
@@ -260,7 +281,7 @@ a.btn.disabled, .btn[aria-disabled="true"] {opacity:.55;}
       // Grace period then enable link
       setTimeout(() => setDisabledLink(a, false), STAGE_GRACE_MS);
 
-      // Poll expiry info
+      // Poll expiry info + PKCS#12 password (from host-mounted secret)
       const hint = q('#expiry-hint');
       hint.textContent = 'Preparing certificate…';
       hint.className = 'text-info help-min';
