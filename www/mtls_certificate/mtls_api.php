@@ -1,269 +1,348 @@
 <?php
+// mtls_api.php
 declare(strict_types=1);
-set_include_path('.:' . __DIR__ . '/../includes/');
+set_include_path(__DIR__ . '/../includes' . PATH_SEPARATOR . get_include_path());
 include_once 'web_functions.inc.php';
 
-// Require authenticated session (proxy headers provided by Authelia)
-set_page_access('auth');
 @session_start();
+header('Content-Type: application/json');
 
-// Trusted proxy headers (must be set by your reverse proxy)
+// ---- Make JSON responses robust (no PHP warnings leaking) ----
+ini_set('display_errors', '0');
+ini_set('display_startup_errors', '0');
+error_reporting(0);
+if (!ob_get_level()) { ob_start(); }
+
+// ---------- Helpers ----------
+function json_out(array $o, int $code = 200): void {
+  while (ob_get_level()) { @ob_end_clean(); }
+  http_response_code($code);
+  echo json_encode($o, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+  exit;
+}
+function json_fail(string $msg, int $code=400): void { json_out(['ok'=>false,'error'=>$msg], $code); }
+function json_ok(array $o=[]): void { json_out(['ok'=>true] + $o); }
+
 function h(string $k): ?string {
   $k = 'HTTP_' . strtoupper(str_replace('-', '_', $k));
   return isset($_SERVER[$k]) ? trim((string)$_SERVER[$k]) : null;
 }
-
-$uid         = h('Remote-User')   ?: ($_SESSION['uid']   ?? null);
-$groups_raw  = h('Remote-Groups') ?: '';
-$groups_list = array_filter(array_map('trim', preg_split('/[;,\s]+/', (string)$groups_raw)));
-$has_mtls    = in_array('mtls', $groups_list, true);
-
-// Gate by group (no identity leak)
-if (!$uid || !$has_mtls) {
-  render_header("mTLS Certificate");
-  echo '<div class="container" style="max-width:860px;margin-top:20px"><div class="alert alert-danger">Access denied: this page is only available to members of the <code>mtls</code> group.</div></div>';
-  render_footer();
-  exit;
+function safe_uid(string $u): string {
+  return preg_replace('/[^a-zA-Z0-9_.-]/', '_', $u);
 }
 
-// CSRF token for API posts
-if (empty($_SESSION['csrf'])) {
-  $_SESSION['csrf'] = bin2hex(random_bytes(16));
+// ---- Apprise notify (multipart -F like your working script) ----
+function mtls_apprise_notify(string $body, ?string $tag = null): void {
+  $url = getenv('APPRISE_URL');
+  if (!$url) return;
+  $tag = $tag ?: (getenv('APPRISE_TAG') ?: 'matrix_group_system_alerts');
+  $cmd = 'curl -s -X POST'
+       . ' -F ' . escapeshellarg('body=' . $body)
+       . ' -F ' . escapeshellarg('tag=' . $tag)
+       . ' '   . escapeshellarg($url)
+       . ' >/dev/null 2>&1 &';
+  @exec($cmd);
 }
 
-render_header("mTLS Certificate");
-?>
-<style>
-/* Minimal wizard styling (Bootstrap 3 friendly) */
-.mtls-card {background:#0b0b0b; border:1px solid rgba(255,255,255,.08); border-radius:10px; padding:18px 16px;}
-.mtls-steps {display:flex; list-style:none; padding:0; margin:0 0 14px 0; gap:10px; align-items:center;}
-.mtls-steps li {display:flex; align-items:center; font-size:12px; letter-spacing:.3px; text-transform:uppercase; color:#9aa3ad;}
-.mtls-steps .dot {width:22px; height:22px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; margin-right:8px; border:1px solid #3a3f44;}
-.mtls-steps li.active .dot {border-color:#7fd1ff;}
-.mtls-steps li.active {color:#cfe9ff;}
-.mtls-steps li.done .dot {background:#22c55e; border-color:#22c55e; color:#08130a;}
-.mtls-steps .sep {flex:1; height:1px; background:linear-gradient(90deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); margin:0 6px;}
-.mtls-body {border-top:1px solid rgba(255,255,255,.08); padding-top:14px;}
-.mtls-row + .mtls-row {border-top:1px dashed rgba(255,255,255,.08); margin-top:12px; padding-top:12px;}
-.mtls-row h5 {margin:0 0 8px 0; font-size:13px; letter-spacing:.3px; color:#cfe9ff; text-transform:uppercase;}
-.help-min {color:#8aa0b2; font-size:12px;}
-.btn-inline-gap {margin-left:8px}
-a.btn.disabled, .btn[aria-disabled="true"] {opacity:.55;}
-#dl-area a.btn {white-space:normal}
+// --- MAILER, app display name (kept from your working version) ---
+$__MTLS_MAIL_ERR = '';
+function mtls_last_mail_error(): string { return $GLOBALS['__MTLS_MAIL_ERR'] ?: 'unknown mail error'; }
 
-/* Keep code + Verify + status on one line (even on mobile) */
-#verify-form { display:flex !important; align-items:center; gap:8px; flex-wrap:nowrap; }
-#verify-form #code { width:clamp(108px, 38vw, 170px); min-width:0; flex:0 0 auto; }
-#btn-verify { white-space:nowrap; flex:0 0 auto; }
-#verify-status { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-#verify-form .form-control { width:auto; }
-
-#send-status, #verify-status, #expiry-hint {min-height:20px}
-</style>
-
-<div class="container" style="max-width:720px; margin-top:20px">
-  <div class="mtls-card">
-    <ol class="mtls-steps" aria-label="Steps">
-      <li class="active" data-step="1"><span class="dot">1</span>Send code</li>
-      <span class="sep" aria-hidden="true"></span>
-      <li data-step="2"><span class="dot">2</span>Verify</li>
-      <span class="sep" aria-hidden="true"></span>
-      <li data-step="3"><span class="dot">3</span>Download</li>
-    </ol>
-
-    <div class="mtls-body">
-
-      <div class="mtls-row" id="step-1">
-        <h5>Send verification code</h5>
-        <p class="help-min">We’ll email a one-time code to confirm it’s you. This keeps the certificate link private.</p>
-        <button id="btn-send" class="btn btn-primary">Send code</button>
-        <button id="btn-resend" class="btn btn-default btn-inline-gap" style="display:none">Resend</button>
-        <span id="send-status" class="text-info btn-inline-gap" aria-live="polite"></span>
-      </div>
-
-      <div class="mtls-row" id="step-2" aria-disabled="true">
-        <h5>Enter code</h5>
-        <form id="verify-form" class="form-inline" onsubmit="return false">
-          <label for="code" class="sr-only">Verification code</label>
-          <input type="text" id="code" class="form-control" maxlength="8" pattern="\d{4,8}" placeholder="6-digit code" disabled required>
-          <button id="btn-verify" class="btn btn-success btn-inline-gap" disabled>Verify</button>
-          <span id="verify-status" class="text-info btn-inline-gap" aria-live="polite"></span>
-        </form>
-      </div>
-
-      <div class="mtls-row" id="step-3" aria-disabled="true">
-        <h5>Download</h5>
-        <div id="dl-area" class="text-muted">Waiting for verification…</div>
-        <div id="expiry-hint" class="help-block help-min" style="margin-top:8px;"></div>
-      </div>
-
-    </div>
-  </div>
-</div>
-
-<script>
-(function(){
-  const csrf = <?= json_encode($_SESSION['csrf']) ?>;
-
-  // UX constants
-  const STAGE_GRACE_MS = 1200;   // briefly gate the download link to avoid early 404s
-
-  function q(sel){ return document.querySelector(sel); }
-  function msg(el, text, kind){ el.textContent = text; el.className = kind ? ('text-' + kind) : ''; }
-  function enable(el, on){ if(!el) return; el.disabled = !on; if (on) el.removeAttribute('disabled'); else el.setAttribute('disabled',''); }
-  function setAriaDisabled(block, on){ if(!block) return; block.setAttribute('aria-disabled', on ? 'true' : 'false'); }
-  function markStep(n, state){ // state: active|done|idle
-    Array.prototype.forEach.call(document.querySelectorAll('.mtls-steps li[data-step]'), li => {
-      li.classList.remove('active','done');
-      const step = li.getAttribute('data-step');
-      if (step == n && state === 'active') li.classList.add('active');
-      if (+step < n) li.classList.add('done');
-      if (state === 'done' && step == n) li.classList.add('done');
-    });
+function mtls_app_display_name(): string {
+  static $name = null;
+  if ($name !== null) return $name;
+  foreach (['get_site_name','site_name','app_name','appTitle','siteTitle'] as $fn) {
+    if (function_exists($fn)) { $n = trim((string)@$fn()); if ($n !== '') return $name = $n; }
   }
-  function setDisabledLink(a, disabled) {
-    if (!a) return;
-    if (disabled) {
-      a.classList.add('disabled');
-      a.setAttribute('aria-disabled','true');
-      a.style.pointerEvents = 'none';
-    } else {
-      a.classList.remove('disabled');
-      a.removeAttribute('aria-disabled');
-      a.style.pointerEvents = '';
-    }
+  foreach (['APP_NAME','SITE_NAME','WEB_TITLE','LUM_TITLE'] as $g) {
+    if (!empty($GLOBALS[$g])) return $name = trim((string)$GLOBALS[$g]);
   }
-  function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+  foreach (['APP_NAME','SITE_NAME','WEB_TITLE'] as $ek) { $n = getenv($ek); if ($n) return $name = trim($n); }
+  $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? '';
+  if ($host) { $host = preg_replace('/:\d+$/','',$host); $host = preg_replace('/^www\./i','',$host); return $name = ucfirst(explode('.',$host)[0]); }
+  return $name = 'LDAP';
+}
 
-  // Initial state: only step 1 enabled
-  markStep(1, 'active');
-  setAriaDisabled(q('#step-2'), true);
-  setAriaDisabled(q('#step-3'), true);
+function mtls_send_mail($to, $subject, $body, $fallbackFrom) {
+  $GLOBALS['__MTLS_MAIL_ERR'] = '';
 
-  // SEND
-  const btnSend   = q('#btn-send');
-  const btnResend = q('#btn-resend');
-  btnSend.addEventListener('click', sendCode);
-  btnResend.addEventListener('click', sendCode);
+  $host = getenv('SMTP_HOSTNAME') ?: '';
+  $port = (int)(getenv('SMTP_HOST_PORT') ?: 587);
+  $user = getenv('SMTP_USERNAME') ?: '';
+  $pass = getenv('SMTP_PASSWORD') ?: '';
 
-  async function sendCode() {
-    const s = q('#send-status'); msg(s, 'Sending…', 'info');
-    enable(btnSend, false); enable(btnResend, false);
-    try {
-      const r = await fetch('mtls_api.php?action=send_code', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({csrf})
-      });
-      const j = await r.json();
-      if(!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      msg(s, 'Code sent. Check your email.', 'success');
+  $fromAddr = getenv('MTLS_MAIL_FROM')
+           ?: getenv('SMTP_FROM')
+           ?: getenv('EMAIL_FROM_ADDRESS')
+           ?: ($fallbackFrom ?: ($user ?: 'no-reply@localhost'));
 
-      // Unlock step 2
-      markStep(2, 'active');
-      setAriaDisabled(q('#step-2'), false);
-      enable(q('#code'), true);
-      enable(q('#btn-verify'), true);
-      // Show resend after first attempt
-      btnResend.style.display = '';
-    } catch(e) {
-      msg(s, e.message, 'danger');
-      enable(btnSend, true); enable(btnResend, true);
-    }
+  if (preg_match('/^\s*([^<]+?)\s*<\s*([^>]+)\s*>\s*$/', $fromAddr, $m)) $fromAddr = trim($m[2]);
+
+  $baseName = mtls_app_display_name();
+  $suffix   = preg_match('/user manager$/i', $baseName) ? '' : ' User Manager';
+  $fromName = trim($baseName . $suffix);
+  $sender   = getenv('MTLS_MAIL_SENDER') ?: '';
+
+  $enc = 'tls';
+  $use_tls = getenv('SMTP_USE_TLS');
+  if ($use_tls !== false && $use_tls !== '') $enc = (strtolower(trim($use_tls)) === 'true' || trim($use_tls) === '1') ? 'tls' : 'none';
+  else $enc = strtolower(getenv('SMTP_ENCRYPTION') ?: 'tls');
+  $autotls = ($enc === 'tls');
+
+  $base = '/opt/PHPMailer/src';
+  $havePHPMailer = false;
+  if (is_file("$base/PHPMailer.php")) {
+    require_once "$base/PHPMailer.php";
+    require_once "$base/SMTP.php";
+    require_once "$base/Exception.php";
+    $havePHPMailer = class_exists('PHPMailer\\PHPMailer\\PHPMailer');
   }
+  if (!$host) { $GLOBALS['__MTLS_MAIL_ERR'] = 'SMTP_HOSTNAME not set'; return false; }
 
-  // VERIFY
-  const input = q('#code');
-  input.addEventListener('input', () => {
-    const v = input.value.trim();
-    enable(q('#btn-verify'), /^\d{4,8}$/.test(v));
-  });
-
-  q('#btn-verify').addEventListener('click', async () => {
-    const s = q('#verify-status'); msg(s, 'Verifying…', 'info');
-    enable(q('#btn-verify'), false);
+  if ($havePHPMailer) {
+    $PHPMailer = 'PHPMailer\\PHPMailer\\PHPMailer';
     try {
-      const v = input.value.trim();
-      const r = await fetch('mtls_api.php?action=verify_code', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({csrf, code: v})
-      });
-      const j = await r.json();
-      if(!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      $mail = new $PHPMailer(true);
+      $mail->isSMTP();
+      $mail->Host = $host;
+      $mail->Port = $port;
+      if ($enc === 'ssl' || $port === 465) { $mail->SMTPSecure='ssl'; $mail->SMTPAutoTLS=false; }
+      elseif ($enc === 'tls') { $mail->SMTPSecure='tls'; $mail->SMTPAutoTLS=$autotls; }
+      else { $mail->SMTPSecure=false; $mail->SMTPAutoTLS=false; }
 
-      // Build download button (disabled briefly while the stager prepares file)
-      const area = q('#dl-area');
-      area.innerHTML = '';
-      const a = document.createElement('a');
-      a.href = 'mtls_download.php?token=' + encodeURIComponent(j.token);
-      a.textContent = 'Download certificate (single-use, valid 5 min)';
-      a.className = 'btn btn-warning';
-      a.dataset.token = j.token;                 // keep token here for the click handler
-      a.addEventListener('click', onDownloadClick);
-      setDisabledLink(a, true);
-      area.appendChild(a);
+      if ($user !== '' || $pass !== '') { $mail->SMTPAuth = true; $mail->Username=$user; $mail->Password=$pass; }
+      else $mail->SMTPAuth = false;
 
-      // Unlock step 3
-      markStep(3, 'active');
-      setAriaDisabled(q('#step-3'), false);
-
-      // Brief grace so the stager can stage the file
-      setTimeout(() => setDisabledLink(a, false), STAGE_GRACE_MS);
-
-      // Hint
-      const hint = q('#expiry-hint');
-      hint.textContent = 'Click download to reveal the PKCS#12 password and expiry.';
-      hint.className = 'text-info help-min';
-
-      msg(s, 'Verified. Token issued.', 'success');
-    } catch(e) {
-      msg(s, e.message, 'danger');
-      enable(q('#btn-verify'), true);
-    }
-  });
-
-  async function onDownloadClick(ev){
-    ev.preventDefault();                       // don’t navigate yet
-    const a     = ev.currentTarget;
-    const token = a.dataset.token;
-    const hint  = q('#expiry-hint');
-    const s     = q('#verify-status');
-
-    try {
-      // IMPORTANT: include CSRF
-      const r = await fetch('mtls_api.php?action=token_info', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ csrf: <?= json_encode($_SESSION['csrf']) ?>, token })
-      });
-      const j = await r.json();
-      if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
-
-      // Render expiry + password right under the button
-      const parts = [];
-      if (typeof j.expires_days === 'number') {
-        const d = j.expires_days;
-        parts.push(d < 0
-          ? 'Certificate appears expired.'
-          : ('Your current certificate expires in about ' + d + ' day' + (d===1?'':'s') + '.'));
+      if (strtolower(getenv('SMTP_ALLOW_SELF_SIGNED') ?: 'false') === 'true') {
+        $mail->SMTPOptions = ['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false,'allow_self_signed'=>true]];
       }
-      if (j.p12_pass) {
-        parts.push('PKCS#12 password: <code>' + esc(j.p12_pass) + '</code>');
-      } else {
-        parts.push('PKCS#12 password is not available.');
-      }
-      hint.innerHTML = parts.join('<br />');
-      hint.className = 'help-min text-muted';
+      $caf = getenv('SMTP_CA_FILE');
+      if ($caf && is_readable($caf)) { $mail->SMTPOptions = $mail->SMTPOptions ?: []; $mail->SMTPOptions['ssl']['cafile']=$caf; }
 
-    } catch(e) {
-      msg(s, e.message, 'danger');
-    }
+      if (strtolower(getenv('SMTP_DEBUG') ?: 'false') === 'true') { $mail->SMTPDebug=2; $mail->Debugoutput=function($s,$l){ error_log('[mtls] SMTP: '.$s); }; }
 
-    // Navigate to the actual download regardless
-    setTimeout(() => { window.location.href = a.href; }, 200);
+      $mail->setFrom($fromAddr, $fromName);
+      if ($sender) $mail->Sender = $sender;
+      $mail->addAddress($to);
+      $mail->Subject = $subject;
+      $mail->Body    = $body;
+      $mail->AltBody = $body;
+
+      $mail->send();
+      return true;
+    } catch (\Throwable $e) { $GLOBALS['__MTLS_MAIL_ERR'] = 'PHPMailer: '.$e->getMessage(); return false; }
   }
-})();
-</script>
-<?php
-render_footer();
+
+  $fromHeaderName = function_exists('mb_encode_mimeheader') ? mb_encode_mimeheader($fromName, 'UTF-8') : $fromName;
+  $headers = "From: {$fromHeaderName} <{$fromAddr}>\r\nContent-Type: text/plain; charset=UTF-8";
+  if ($sender) $headers .= "\r\nReturn-Path: {$sender}";
+  $ok = @mail($to, $subject, $body, $headers);
+  if (!$ok) $GLOBALS['__MTLS_MAIL_ERR'] = 'mail() failed (no local MTA?)';
+  return $ok;
+}
+
+// Simple file-based rate limiter (sliding window)
+function rate_key($uid, $kind) { return hash('sha256', $uid . '|' . $kind); }
+function rate_allow($dir, $key, $limit, $perSeconds) {
+  $f = $dir . '/rate_' . $key . '.json';
+  $now = time();
+  $winStart = $now - $perSeconds;
+  $arr = array();
+  if (file_exists($f)) { $tmp = json_decode((string)file_get_contents($f), true); if (is_array($tmp)) $arr = $tmp; }
+  $arr = array_values(array_filter($arr, function($t) use ($winStart) { return (int)$t >= $winStart; }));
+  if (count($arr) >= $limit) return false;
+  $arr[] = $now;
+  file_put_contents($f, json_encode($arr), LOCK_EX);
+  return true;
+}
+
+// ---------- CSRF ----------
+$Body = json_decode(file_get_contents('php://input'), true);
+if (!is_array($Body)) $Body = array();
+if (empty($_SESSION['csrf']) || empty($Body['csrf']) || !hash_equals($_SESSION['csrf'], (string)$Body['csrf'])) {
+  json_fail('CSRF check failed', 403);
+}
+
+// ---------- Identity (proxy headers only) ----------
+$uid    = h('Remote-User');   if (!$uid && isset($_SESSION['uid']))    $uid = $_SESSION['uid'];
+$email  = h('Remote-Email');  if (!$email && isset($_SESSION['email'])) $email = $_SESSION['email'];
+$groups_raw = (string)(h('Remote-Groups') ? h('Remote-Groups') : '');
+$groups = preg_split('/[;,\s]+/', $groups_raw, -1, PREG_SPLIT_NO_EMPTY);
+$groups = array_map('trim', is_array($groups)?$groups:array());
+
+if (!$uid) json_fail('Not authenticated', 401);
+if (!in_array('mtls', $groups, true)) json_fail('Not in mtls group', 403);
+
+// ---------- Storage paths ----------
+$APP_ROOT = dirname(__DIR__);              // /opt/ldap_user_manager
+$DATA     = $APP_ROOT . '/data/mtls';
+$CODES    = $DATA . '/codes';
+$TOKENS   = $DATA . '/tokens';
+$LOGS     = $DATA . '/logs';
+
+function ensure_dir(string $d) {
+  if (is_dir($d)) return;
+  if (!@mkdir($d, 0775, true) && !is_dir($d)) json_fail("Cannot create directory: $d", 500);
+}
+ensure_dir($CODES);
+ensure_dir($TOKENS);
+ensure_dir($LOGS);
+
+// ---------- Config ----------
+$MAIL_FROM        = getenv('MTLS_MAIL_FROM') ?: (getenv('EMAIL_FROM_ADDRESS') ?: 'no-reply@localhost');
+$CODE_TTL_SEC     = 300; // 5 minutes
+$TOKEN_TTL_SEC    = 300; // 5 minutes
+$APPRISE_URL      = getenv('APPRISE_URL'); // optional
+
+// For token_info: where to read cert + secret password
+$CERT_BASE        = getenv('MTLS_CERT_BASE') ?: '/mnt/mtls-certs';
+$P12_SECRET_BASE  = getenv('MTLS_P12_SECRET_BASE') ?: '/docker-secrets/certificates';
+
+// ---------- Actions ----------
+$action = isset($_GET['action']) ? $_GET['action'] : '';
+
+// send_code
+if ($action === 'send_code') {
+  if (!$email) json_fail('No email associated with this account', 400);
+  if (!rate_allow($LOGS, rate_key($uid, 'send'), 3, 3600)) json_fail('Too many code requests, try later', 429);
+
+  $code = str_pad((string)mt_rand(0, 999999), 6, '0', STR_PAD_LEFT);
+  $hash = password_hash($code, PASSWORD_DEFAULT);
+
+  $rec = array(
+    'uid'      => $uid,
+    'hash'     => $hash,
+    'ip'       => ($_SERVER['REMOTE_ADDR'] ?? ''),
+    'ua'       => ($_SERVER['HTTP_USER_AGENT'] ?? ''),
+    'ts'       => time(),
+    'exp'      => time() + $CODE_TTL_SEC,
+    'attempts' => 0,
+    'session'  => session_id(),
+  );
+  $fname = $CODES . '/' . hash('sha256', $uid . '|' . session_id()) . '.json';
+  file_put_contents($fname, json_encode($rec), LOCK_EX);
+
+  $subj = 'Your one-time code';
+  $msg  = "Your verification code is: {$code}\nThis code expires in 5 minutes.\nIf you did not request this, ignore this message.";
+
+  $sent = mtls_send_mail($email, $subj, $msg, $MAIL_FROM);
+  if (!$sent) json_fail('Failed to send verification email: ' . mtls_last_mail_error(), 500);
+
+  @file_put_contents($LOGS . '/events.log', json_encode(['evt'=>'code_sent','uid'=>$uid,'t'=>time()]) . "\n", FILE_APPEND);
+  json_ok();
+}
+
+// verify_code
+if ($action === 'verify_code') {
+  $code = isset($Body['code']) ? (string)$Body['code'] : '';
+  if (!preg_match('/^\d{4,8}$/', $code)) json_fail('Invalid code format');
+
+  $fname = $CODES . '/' . hash('sha256', $uid . '|' . session_id()) . '.json';
+  if (!file_exists($fname)) json_fail('No active code', 400);
+
+  $rec = json_decode((string)file_get_contents($fname), true);
+  if (!is_array($rec)) json_fail('Code record parse error', 400);
+  if (($rec['exp'] ?? 0) < time()) { @unlink($fname); json_fail('Code expired', 400); }
+  if ((int)($rec['attempts'] ?? 0) >= 5) { @unlink($fname); json_fail('Too many attempts', 429); }
+
+  $rec['attempts'] = (int)($rec['attempts'] ?? 0) + 1;
+  file_put_contents($fname, json_encode($rec), LOCK_EX);
+
+  if (!password_verify($code, $rec['hash'])) json_fail('Incorrect code', 400);
+
+  // Code is valid → remove challenge and mint a single-use token
+  @unlink($fname);
+
+  $token = bin2hex(openssl_random_pseudo_bytes(24));
+  $tokRec = array(
+    'uid'     => $uid,
+    'issued'  => time(),
+    'exp'     => time() + $TOKEN_TTL_SEC,
+    'used'    => false,
+    'ip'      => ($_SERVER['REMOTE_ADDR'] ?? ''),
+    'session' => session_id(),
+  );
+  $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
+  file_put_contents($tfile, json_encode($tokRec), LOCK_EX);
+
+  // Notify (no secrets)
+  $host = $_SERVER['HTTP_HOST'] ?? php_uname('n') ?? 'host';
+  $ip   = $_SERVER['REMOTE_ADDR'] ?? '';
+  $body = '🔐 `' . $host . '` **mTLS Token Issued**:<br />'
+        . 'User: <code>' . htmlspecialchars($uid, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+        . 'IP: <code>' . htmlspecialchars($ip, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+        . 'TTL: 5m';
+  mtls_apprise_notify($body);
+
+  // UI will poll token_info for expiry + password
+  json_ok(['token'=>$token, 'expires_days'=>null]);
+}
+
+// token_info
+if ($action === 'token_info') {
+  $token = isset($Body['token']) ? (string)$Body['token'] : '';
+  if (!preg_match('/^[a-f0-9]{48}$/', $token)) json_fail('Bad token');
+
+  $tfile = $TOKENS . '/' . hash('sha256', $token) . '.json';
+  $ufile = $tfile . '.used';
+
+  $rec2 = null;
+  if (is_file($tfile)) { $rec2 = json_decode((string)file_get_contents($tfile), true); }
+  elseif (is_file($ufile)) { $rec2 = json_decode((string)file_get_contents($ufile), true); }
+  if (!is_array($rec2)) json_fail('Token not found', 404);
+  if (($rec2['session'] ?? '') !== session_id()) json_fail('Session mismatch', 403);
+
+  $uid_safe = safe_uid((string)$rec2['uid']);
+  $expires_days = null;
+  $p12_pass = null;
+
+  // Try CRT first (either client.crt or cert.crt)
+  $dir = rtrim($CERT_BASE, '/') . '/user_' . $uid_safe;
+  $crt1 = $dir . '/client.crt';
+  $crt2 = $dir . '/cert.crt';
+  $pem = null;
+  if (is_file($crt1)) $pem = @file_get_contents($crt1);
+  elseif (is_file($crt2)) $pem = @file_get_contents($crt2);
+  if ($pem !== false && $pem) {
+    $x = @openssl_x509_parse($pem);
+    if ($x && isset($x['validTo_time_t'])) {
+      $expires_days = (int) floor(($x['validTo_time_t'] - time()) / 86400);
+    }
+  }
+
+  // If no CRT info, try PFX with secret pass
+  if ($expires_days === null) {
+    $pfx = $dir . '/user_' . $uid_safe . '.pfx';
+    $passFile = rtrim($P12_SECRET_BASE,'/') . '/user_' . $uid_safe . '/pkcs12.pass';
+    if (is_file($pfx) && is_file($passFile)) {
+      $pf = @file_get_contents($passFile);
+      if ($pf !== false) {
+        $p12_raw = @file_get_contents($pfx);
+        $out = [];
+        if ($p12_raw !== false && @openssl_pkcs12_read($p12_raw, $out, trim($pf))) {
+          if (!empty($out['cert'])) {
+            $x = @openssl_x509_parse($out['cert']);
+            if ($x && isset($x['validTo_time_t'])) {
+              $expires_days = (int) floor(($x['validTo_time_t'] - time()) / 86400);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Always try to load pkcs12 password for the UI (user asked to show it)
+  $passFile2 = rtrim($P12_SECRET_BASE,'/') . '/user_' . $uid_safe . '/pkcs12.pass';
+  if (is_file($passFile2)) {
+    $p = @file_get_contents($passFile2);
+    if ($p !== false) $p12_pass = rtrim($p, "\r\n");
+  }
+
+  json_ok([
+    'expires_days' => is_numeric($expires_days) ? (int)$expires_days : null,
+    'p12_pass'     => ($p12_pass !== null ? $p12_pass : null),
+  ]);
+}
+
+// Unknown action
+json_fail('Unknown action', 400);
