@@ -101,11 +101,7 @@ code.k { padding:2px 6px; background:#111; border:1px solid rgba(255,255,255,.08
 
     </div>
   </div>
-
-  <div class="help-min" style="margin-top:10px;">
-    <strong>User:</strong> <code><?=htmlentities($uid)?></code>
-    <?php if ($email): ?> · <strong>Email:</strong> <code><?=htmlentities($email)?></code><?php endif; ?>
-  </div>
+  
 </div>
 
 <script>
