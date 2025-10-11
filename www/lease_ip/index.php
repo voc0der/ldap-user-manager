@@ -145,7 +145,7 @@ td.text-right .btn { margin-left:6px; }
           <tbody id="tbody"></tbody>
           <tfoot>
           <tr>
-            <td colspan="5">
+            <td colspan="6">
               <div class="control-line">
                 <label class="smallprint">Add IP (admin):</label>
                 <input id="manual-ip" type="text" class="form-control input-slim"
@@ -159,7 +159,7 @@ td.text-right .btn { margin-left:6px; }
             </td>
           </tr>
           <tr>
-            <td colspan="5">
+            <td colspan="6">
               <div class="control-line">
                 <button id="btn-clear" class="btn btn-soft btn-pill">Clear all</button>
                 <label class="smallprint">Prune (hours):</label>
