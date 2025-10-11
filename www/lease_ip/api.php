@@ -3,6 +3,7 @@ declare(strict_types=1);
 @session_start();
 set_include_path(__DIR__ . "/../includes/");
 include_once "web_functions.inc.php";
+include_once "jf_map.inc.php";
 
 header('Content-Type: application/json');
 
@@ -147,6 +148,8 @@ if ($data === null) {
     echo json_encode(['ok'=>false, 'error'=>'Invalid JSON from lease endpoint', 'status'=>$code, 'body'=>$resp]);
     exit;
 }
+
+$data = jf_map_rewrite_response($data);
 
 http_response_code(($code >= 200 && $code < 300) ? 200 : $code);
 header('Cache-Control: no-store');
