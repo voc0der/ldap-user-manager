@@ -199,7 +199,7 @@
         tdAct.appendChild(staticBtn);
 
         tr.appendChild(tdLabel);
-        tr.appendChild(tdSource);  // NEW: Source column
+        tr.appendChild(tdSource);
         tr.appendChild(tdTs);
         tr.appendChild(tdIp);
         tr.appendChild(tdExp);
