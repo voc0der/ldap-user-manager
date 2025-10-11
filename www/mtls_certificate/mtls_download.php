@@ -74,11 +74,14 @@ if (($rec['exp'] ?? 0) < time()) { @unlink($tfile); hard_fail(410, 'Token expire
 if (!hash_equals((string)($rec['session'] ?? ''), session_id())) hard_fail(403, 'Session mismatch');
 if (!empty($rec['used'])) hard_fail(410, 'Token already used');
 
-// ---------- Ensure artifact is ready BEFORE marking used ----------
+// --- Ensure artifact is ready BEFORE marking used ---
 $real = rtrim($STAGE_BASE, '/') . '/' . $token_hash . '/' . $FILENAME;
-if (!is_file($real) || !is_readable($real)) {
-  // keep the token intact; let UI wait/poll; your stager’s GRACE prevents races
-  hard_fail(503, 'Artifact not ready');
+
+// Skip by default to avoid permission mismatch between LUM and SWAG
+$doCheck = (strtolower(getenv('MTLS_SKIP_STAGE_CHECK') ?: 'true') === 'false');
+if ($doCheck) {
+  clearstatcache(true, $real);
+  if (!file_exists($real)) { hard_fail(503, 'Artifact not ready'); }
 }
 
 // ---------- Mark token used (atomic-ish) ----------
