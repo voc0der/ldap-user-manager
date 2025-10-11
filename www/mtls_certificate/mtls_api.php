@@ -7,6 +7,24 @@ include_once 'web_functions.inc.php';
 header('Content-Type: application/json');
 
 // ---------- Helpers ----------
+function client_ip(): string {
+  // Prefer Cloudflare if you ever put it in front
+  if (!empty($_SERVER['HTTP_CF_CONNECTING_IP']) && filter_var($_SERVER['HTTP_CF_CONNECTING_IP'], FILTER_VALIDATE_IP)) {
+    return $_SERVER['HTTP_CF_CONNECTING_IP'];
+  }
+  // Trust the address SWAG appends to X-Forwarded-For (right-most is safe)
+  if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+    $parts = array_map('trim', explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']));
+    $cand  = end($parts);
+    if ($cand && filter_var($cand, FILTER_VALIDATE_IP)) return $cand;
+  }
+  // Fallback
+  if (!empty($_SERVER['HTTP_X_REAL_IP']) && filter_var($_SERVER['HTTP_X_REAL_IP'], FILTER_VALIDATE_IP)) {
+    return $_SERVER['HTTP_X_REAL_IP'];
+  }
+  return $_SERVER['REMOTE_ADDR'] ?? '';
+}
+
 // ---- Apprise notify (multipart -F like your working script) ----
 function mtls_apprise_notify(string $body, ?string $tag = null): void {
   $url = getenv('APPRISE_URL');
@@ -324,7 +342,7 @@ if ($action === 'verify_code') {
 
   // Styled Apprise: token issued
   $host = $_SERVER['HTTP_HOST'] ?? php_uname('n') ?? 'host';
-  $ip   = $_SERVER['REMOTE_ADDR'] ?? '';
+  $ip   = client_ip();
   $body = '🔐 `' . $host . '` **mTLS Token Issued**:<br />'
         . 'User: <code>' . htmlspecialchars($uid, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
         . 'IP: <code>' . htmlspecialchars($ip,  ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
