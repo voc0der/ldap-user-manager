@@ -132,6 +132,9 @@
         const tdLabel = document.createElement('td');
         tdLabel.textContent = ent.host || ent.label || 'unknown';
 
+        const tdSource = document.createElement('td');
+        tdSource.textContent = (ent.source && String(ent.source).trim()) ? ent.source : '—';
+
         const tdTs = document.createElement('td');
         tdTs.textContent = ent.timestamp || '';
 
@@ -196,6 +199,7 @@
         tdAct.appendChild(staticBtn);
 
         tr.appendChild(tdLabel);
+        tr.appendChild(tdSource);  // NEW: Source column
         tr.appendChild(tdTs);
         tr.appendChild(tdIp);
         tr.appendChild(tdExp);
@@ -342,7 +346,7 @@
         await softRefresh({ force: true });
         setStatus(`Pruned entries older than ${n} hours`);
       } catch (e) {
-        setStatus('Prune failed: ' + e.message);
+        setStatus('Prune failed: ' + e.message');
       } finally {
         btnPrune.disabled = false;
       }
