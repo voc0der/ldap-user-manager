@@ -2,8 +2,8 @@
 declare(strict_types=1);
 
 /**
- * Jellyfin masked-token → username mapper for LUM.
- * Reads /opt/ldap_user_manager/data/jellyfin-users/jf_token_map.json
+ * Masked-token → username mapper for LUM.
+ * Reads /opt/ldap_user_manager/data/xxxx/jf_token_map.json
  * and replaces labels like "175a12d5…0941" with "brocoder" when known.
  */
 
