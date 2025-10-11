@@ -115,7 +115,8 @@ $url = $apiBase . (str_contains($apiBase, '?') ? '&' : '?') . $qs;
 // ---- Upstream call ----
 $headers = [
     'Accept: application/json',
-    'X-IP-Lease-Label: LUM ' . $userId,
+    'X-IP-Lease-Label: ' . $userId,
+    'X-IP-Lease-Source: LUM',
 ];
 // forward static intent ONLY on add (still one GET var)
 if ($key === 'add' && $lumStaticHdr !== '') {
