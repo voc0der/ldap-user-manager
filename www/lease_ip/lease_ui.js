@@ -346,7 +346,7 @@
         await softRefresh({ force: true });
         setStatus(`Pruned entries older than ${n} hours`);
       } catch (e) {
-        setStatus('Prune failed: ' + e.message');
+        setStatus('Prune failed: ' + e.message);
       } finally {
         btnPrune.disabled = false;
       }
