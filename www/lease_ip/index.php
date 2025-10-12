@@ -86,7 +86,7 @@ td.text-right .btn { margin-left:6px; }
 
 <div class="container lease-wrap">
 
-  <!-- USER CARD -->
+  <!-- USER CARD (keep for everyone; handy quick actions) -->
   <div class="panel panel-modern">
     <div class="panel-heading text-center header-title">LEASE IP</div>
     <div class="panel-body">
@@ -120,7 +120,8 @@ td.text-right .btn { margin-left:6px; }
     </div>
   </div>
 
-  <!-- MY LEASES (visible to everyone; filtered by server for non-admins) -->
+  <?php if (!$isAdmin): ?>
+  <!-- MY LEASES (non-admins only) -->
   <div class="panel panel-modern" style="margin-top:22px;">
     <div class="panel-heading">
       <div class="header-inline">
@@ -156,9 +157,10 @@ td.text-right .btn { margin-left:6px; }
       </div>
     </div>
   </div>
+  <?php endif; ?>
 
   <?php if ($isAdmin): ?>
-  <!-- ADMIN CARD -->
+  <!-- ADMIN: ACTIVE LEASES (full list; original view) -->
   <div class="panel panel-modern" style="margin-top:22px;">
     <div class="panel-heading">
       <div class="header-inline">
