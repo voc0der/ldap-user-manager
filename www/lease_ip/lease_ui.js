@@ -144,7 +144,7 @@
             await refreshMine({ force: true });
             myStatus.textContent = `Deleted ${ent.ip}`;
           } catch (e) {
-            myStatus.textContent = 'Delete failed: ' + e.message';
+            myStatus.textContent = 'Delete failed: ' + e.message;
           } finally { delBtn.disabled = false; }
         });
 
