@@ -240,6 +240,31 @@ if (isset($_POST['create_account'])) {
   }
 }
 
+// ---------- Enable "Email these credentials" if a valid recipient email is present ----------
+if ($EMAIL_SENDING_ENABLED == TRUE && $admin_setup != TRUE) {
+    // Try to discover the current email value
+    $recipient_email = '';
+
+    // Prefer what you've already collected in $new_account_r
+    if (isset($new_account_r['mail'][0]) && is_string($new_account_r['mail'][0])) {
+        $recipient_email = trim($new_account_r['mail'][0]);
+    } elseif (isset($mail[0]) && is_string($mail[0])) {
+        $recipient_email = trim($mail[0]);
+    }
+
+    // Optional: synthesize from UID + EMAIL_DOMAIN if we have both and no email yet
+    if ($recipient_email === '' && isset($EMAIL_DOMAIN) && isset($uid[0]) && $uid[0] !== '') {
+        $recipient_email = $uid[0] . '@' . $EMAIL_DOMAIN;
+        // reflect it back into the structures so the form shows it
+        $mail[0] = $recipient_email;
+        $new_account_r['mail'] = ['0' => $recipient_email];
+    }
+
+    // Finally decide if checkbox should be enabled
+    $disabled_email_tickbox = !( $recipient_email !== '' && is_valid_email($recipient_email) );
+}
+
+
 // Show any errors
 $errors = "";
 if ($invalid_cn)                { $errors .= "<li>The Common Name is required</li>\n"; }
@@ -311,6 +336,33 @@ function random_password(){
 
 document.addEventListener('DOMContentLoaded', function(){
   updateMeter(<?php echo (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN); ?>);
+});
+</script>
+
+<script type="text/javascript">
+document.addEventListener('DOMContentLoaded', function () {
+  var emailInput = document.getElementById('mail');                // id used by render_js_email_generator(..., 'mail')
+  var sendBox    = document.getElementById('send_email_checkbox'); // your checkbox id
+
+  if (!emailInput || !sendBox) return;
+
+  function looksLikeEmail(v){
+    v = (v || '').trim();
+    // simple client-side check; server still uses is_valid_email()
+    return v.length > 3 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v);
+  }
+
+  function refreshCheckbox() {
+    sendBox.disabled = !looksLikeEmail(emailInput.value);
+    // Optional: auto-check when it becomes valid
+    if (!sendBox.disabled && !sendBox.checked) {
+      // leave it unchecked by default; comment this out if you want auto-check:
+      // sendBox.checked = true;
+    }
+  }
+
+  emailInput.addEventListener('input', refreshCheckbox);
+  refreshCheckbox(); // initialize on page load
 });
 </script>
 
