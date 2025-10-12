@@ -49,22 +49,23 @@
     return out.trim();
   };
 
-  // === User actions (always-on) ==============================================
+  // === User quick actions ====================================================
   const userStatus = document.getElementById('user-status');
   const btnAdd = document.getElementById('btn-add');
   const btnDel = document.getElementById('btn-del');
-
   const setBusy = (el, busy) => el && (el.disabled = !!busy);
+
+  // We’ll set these to real functions only if the corresponding sections exist
+  let refreshMine = null;
+  let adminSoftRefresh = null;
 
   btnAdd?.addEventListener('click', async () => {
     setBusy(btnAdd, true);
     try {
       const r = await callOne('add', clientIp || '');
       userStatus.textContent = (r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`;
-      // refresh my leases table
       if (typeof refreshMine === 'function') refreshMine({ force: true });
-      // also update admin list if present
-      if (isAdmin && typeof adminSoftRefresh === 'function') adminSoftRefresh({ force: true });
+      if (typeof adminSoftRefresh === 'function') adminSoftRefresh({ force: true });
     } catch (e) {
       userStatus.textContent = 'Add failed: ' + e.message;
     } finally { setBusy(btnAdd, false); }
@@ -76,161 +77,160 @@
       const r = await callOne('delete', clientIp || '');
       userStatus.textContent = (r.result === 'not_found') ? `Not present: ${r.ip}` : `Deleted: ${r.ip}`;
       if (typeof refreshMine === 'function') refreshMine({ force: true });
-      if (isAdmin && typeof adminSoftRefresh === 'function') adminSoftRefresh({ force: true });
+      if (typeof adminSoftRefresh === 'function') adminSoftRefresh({ force: true });
     } catch (e) {
       userStatus.textContent = 'Delete failed: ' + e.message;
     } finally { setBusy(btnDel, false); }
   });
 
-  // === "MY LEASES" table (all users) =========================================
-  const myTbody = document.getElementById('my-tbody');
-  const myCount = document.getElementById('my-count');
-  const myRefreshBtn = document.getElementById('my-refresh');
-  const myStatus = document.getElementById('my-status');
+  // === "MY LEASES" (only renders for non-admins; DOM won’t exist for admins) ==
+  (function initMyLeasesIfPresent() {
+    const myTbody = document.getElementById('my-tbody');
+    if (!myTbody) return; // Admins won’t have this section
+    const myCount = document.getElementById('my-count');
+    const myRefreshBtn = document.getElementById('my-refresh');
+    const myStatus = document.getElementById('my-status');
 
-  let myEtag = '';
-  let myHash = '';
-  let myPoll = null;
-  let myTimer = null;
+    let myEtag = '';
+    let myHash = '';
+    let myPoll = null;
 
-  const renderRowsGeneric = (entries, tbody, countEl) => {
-    tbody.innerHTML = '';
-    const ttlHrs = 96; // UI shows admin-controlled prune; for "my", just compute against 96 by default
-    const now = nowMs();
+    const renderRows = (entries) => {
+      myTbody.innerHTML = '';
+      const ttlHrs = 96;
+      const now = nowMs();
+      for (const ent of entries) {
+        const tr = document.createElement('tr');
 
-    for (const ent of entries) {
-      const tr = document.createElement('tr');
+        const tdUser = document.createElement('td');
+        tdUser.textContent = ent.user || ent.label || ent.host || 'unknown';
 
-      const tdUser = document.createElement('td');
-      tdUser.textContent = ent.user || ent.label || ent.host || 'unknown';
+        const tdSource = document.createElement('td');
+        tdSource.textContent = (ent.source && String(ent.source).trim()) ? ent.source : '—';
 
-      const tdSource = document.createElement('td');
-      tdSource.textContent = (ent.source && String(ent.source).trim()) ? ent.source : '—';
+        const tdTs = document.createElement('td');
+        tdTs.textContent = ent.timestamp || '';
 
-      const tdTs = document.createElement('td');
-      tdTs.textContent = ent.timestamp || '';
+        const tdIp = document.createElement('td');
+        tdIp.textContent = ent.ip || '';
+        if (ent.static === true) tdIp.textContent += ' (static)';
 
-      const tdIp = document.createElement('td');
-      tdIp.textContent = ent.ip || '';
-      if (ent.static === true) tdIp.textContent += ' (static)';
-
-      const tdExp = document.createElement('td');
-      let expText = '—';
-      let expTitle = '';
-      if (ent.static === true) {
-        expText = 'static';
-      } else {
-        const tsms = getTimestampMs(ent);
-        if (Number.isFinite(tsms)) {
-          const expAt = tsms + ttlHrs * 3600000;
-          expText = fmtRemaining(expAt - now);
-          expTitle = new Date(expAt).toLocaleString();
+        const tdExp = document.createElement('td');
+        let expText = '—';
+        let expTitle = '';
+        if (ent.static === true) {
+          expText = 'static';
+        } else {
+          const tsms = getTimestampMs(ent);
+          if (Number.isFinite(tsms)) {
+            const expAt = tsms + ttlHrs * 3600000;
+            expText = fmtRemaining(expAt - now);
+            expTitle = new Date(expAt).toLocaleString();
+          }
         }
+        tdExp.textContent = expText;
+        if (expTitle) tdExp.title = expTitle;
+
+        const tdAct = document.createElement('td');
+        tdAct.className = 'text-right';
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.className = 'btn btn-default btn-sm';
+        delBtn.addEventListener('click', async () => {
+          delBtn.disabled = true;
+          try {
+            await callOne('delete', ent.ip);
+            await refreshMine({ force: true });
+            myStatus.textContent = `Deleted ${ent.ip}`;
+          } catch (e) {
+            myStatus.textContent = 'Delete failed: ' + e.message;
+          } finally { delBtn.disabled = false; }
+        });
+
+        const staticBtn = document.createElement('button');
+        staticBtn.textContent = (ent.static === true) ? 'Unset Static' : 'Set Static';
+        staticBtn.className = 'btn btn-default btn-sm';
+        staticBtn.style.marginLeft = '0.5rem';
+        staticBtn.addEventListener('click', async () => {
+          staticBtn.disabled = true;
+          try {
+            const makeStatic = !(ent.static === true);
+            await callOne('add', ent.ip, { 'X-LUM-Static': makeStatic ? '1' : '0' });
+            await refreshMine({ force: true });
+            myStatus.textContent = makeStatic ? `Marked static: ${ent.ip}` : `Unmarked static: ${ent.ip}`;
+          } catch (e) {
+            myStatus.textContent = 'Static toggle failed: ' + e.message;
+          } finally { staticBtn.disabled = false; }
+        });
+
+        tdAct.appendChild(delBtn);
+        tdAct.appendChild(staticBtn);
+
+        tr.appendChild(tdUser);
+        tr.appendChild(tdSource);
+        tr.appendChild(tdTs);
+        tr.appendChild(tdIp);
+        tr.appendChild(tdExp);
+        tr.appendChild(tdAct);
+        myTbody.appendChild(tr);
       }
-      tdExp.textContent = expText;
-      if (expTitle) tdExp.title = expTitle;
+      myCount.textContent = String(entries.length);
+    };
 
-      const tdAct = document.createElement('td');
-      tdAct.className = 'text-right';
+    const hashEntries = (entries) => {
+      try { return JSON.stringify(entries); } catch { return String(entries?.length || 0); }
+    };
 
-      const delBtn = document.createElement('button');
-      delBtn.textContent = 'Delete';
-      delBtn.className = 'btn btn-default btn-sm';
-      delBtn.addEventListener('click', async () => {
-        delBtn.disabled = true;
-        try {
-          await callOne('delete', ent.ip);
-          await refreshMine({ force: true });
-          myStatus.textContent = `Deleted ${ent.ip}`;
-        } catch (e) {
-          myStatus.textContent = 'Delete failed: ' + e.message;
-        } finally {
-          delBtn.disabled = false;
-        }
-      });
+    refreshMine = async function ({ force = false } = {}) {
+      const headers = { 'Cache-Control': 'no-store' };
+      if (!force && myEtag) headers['If-None-Match'] = myEtag;
 
-      const staticBtn = document.createElement('button');
-      staticBtn.textContent = (ent.static === true) ? 'Unset Static' : 'Set Static';
-      staticBtn.className = 'btn btn-default btn-sm';
-      staticBtn.style.marginLeft = '0.5rem';
-      staticBtn.addEventListener('click', async () => {
-        staticBtn.disabled = true;
-        try {
-          const makeStatic = !(ent.static === true);
-          await callOne('add', ent.ip, { 'X-LUM-Static': makeStatic ? '1' : '0' });
-          await refreshMine({ force: true });
-          myStatus.textContent = makeStatic ? `Marked static: ${ent.ip}` : `Unmarked static: ${ent.ip}`;
-        } catch (e) {
-          myStatus.textContent = 'Static toggle failed: ' + e.message;
-        } finally {
-          staticBtn.disabled = false;
-        }
-      });
+      const res = await fetch(API + '?list=1', { credentials: 'include', headers });
+      if (res.status === 304) {
+        myStatus.textContent = `Up to date · ${new Date().toLocaleTimeString()}`;
+        return;
+      }
+      if (!res.ok) { myStatus.textContent = `HTTP ${res.status}`; return; }
 
-      tdAct.appendChild(delBtn);
-      tdAct.appendChild(staticBtn);
+      let data;
+      try { data = await res.json(); } catch { myStatus.textContent = 'Invalid JSON from API'; return; }
+      if (data.ok === false) { myStatus.textContent = data.error || 'API error'; return; }
 
-      tr.appendChild(tdUser);
-      tr.appendChild(tdSource);
-      tr.appendChild(tdTs);
-      tr.appendChild(tdIp);
-      tr.appendChild(tdExp);
-      tr.appendChild(tdAct);
-      tbody.appendChild(tr);
+      const et = res.headers.get('ETag') || '';
+      if (et) myEtag = et;
+
+      const entries = (data.entries || []);
+      const h = hashEntries(entries);
+      if (force || h !== myHash) {
+        renderRows(entries);
+        myHash = h;
+        myStatus.textContent = `Updated · ${new Date().toLocaleTimeString()}`;
+      } else {
+        myStatus.textContent = `No changes · ${new Date().toLocaleTimeString()}`;
+      }
+    };
+
+    function startMyPoller() {
+      if (myPoll) clearInterval(myPoll);
+      myPoll = setInterval(() => refreshMine({ force: false }), document.hidden ? 60000 : 20000);
     }
-    countEl.textContent = String(entries.length);
-  };
 
-  const hashEntries = (entries) => {
-    try { return JSON.stringify(entries); } catch { return String(entries?.length || 0); }
-  };
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshMine({ force: true });
+    });
+    myRefreshBtn?.addEventListener('click', () => refreshMine({ force: true }));
 
-  async function refreshMine({ force = false } = {}) {
-    const headers = { 'Cache-Control': 'no-store' };
-    if (!force && myEtag) headers['If-None-Match'] = myEtag;
+    // Kickoff for non-admins
+    refreshMine({ force: true });
+    startMyPoller();
+  })();
 
-    const res = await fetch(API + '?list=1', { credentials: 'include', headers });
-    if (res.status === 304) {
-      myStatus.textContent = `Up to date · ${new Date().toLocaleTimeString()}`;
-      return;
-    }
-    if (!res.ok) {
-      myStatus.textContent = `HTTP ${res.status}`;
-      return;
-    }
-    let data;
-    try { data = await res.json(); } catch { myStatus.textContent = 'Invalid JSON from API'; return; }
-    if (data.ok === false) { myStatus.textContent = data.error || 'API error'; return; }
-
-    const et = res.headers.get('ETag') || '';
-    if (et) myEtag = et;
-
-    const entries = (data.entries || []);
-    const h = hashEntries(entries);
-    if (force || h !== myHash) {
-      renderRowsGeneric(entries, myTbody, myCount);
-      myHash = h;
-      myStatus.textContent = `Updated · ${new Date().toLocaleTimeString()}`;
-    } else {
-      myStatus.textContent = `No changes · ${new Date().toLocaleTimeString()}`;
-    }
-  }
-
-  // Polling for "My leases"
-  function startMyPoller() {
-    if (myPoll) clearInterval(myPoll);
-    myPoll = setInterval(() => refreshMine({ force: false }), document.hidden ? 60000 : 20000);
-  }
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) refreshMine({ force: true });
-  });
-  myRefreshBtn?.addEventListener('click', () => refreshMine({ force: true }));
-
-  // === Admin live list =======================================================
-  let adminSoftRefresh = null; // exposed for user card to poke
-
-  if (isAdmin) {
+  // === Admin live list (only runs when admin table exists) ===================
+  (function initAdminIfPresent() {
     const tbody = document.getElementById('tbody');
+    if (!tbody) return; // Non-admins won’t have this section
+
     const count = document.getElementById('count');
     const btnRefresh = document.getElementById('btn-refresh');
     const btnClear = document.getElementById('btn-clear');
@@ -241,18 +241,17 @@
     const manualStatic = document.getElementById('manual-static');
     const btnAddManual = document.getElementById('btn-add-manual');
 
-    // --- State
     let currentEntries = [];
     let lastHash = '';
     let lastEtag = '';
     let pollTimer = null;
     let countdownTimer = null;
-    let inFlight = null;  // AbortController for list fetch
+    let inFlight = null;
     let backoffMs = 0;
 
-    const POLL_VISIBLE_MS = 15000; // 15s when tab visible
-    const POLL_HIDDEN_MS  = 60000; // 60s when tab hidden
-    const COUNTDOWN_TICK_MS = 10000; // re-render remaining time every 10s
+    const POLL_VISIBLE_MS = 15000;
+    const POLL_HIDDEN_MS  = 60000;
+    const COUNTDOWN_TICK_MS = 10000;
 
     const setStatus = (msg) => { adminStatus.textContent = msg || ''; };
 
@@ -344,6 +343,10 @@
       count.textContent = String(entries.length);
     };
 
+    const hashEntries = (entries) => {
+      try { return JSON.stringify(entries); } catch { return String(entries?.length || 0); }
+    };
+
     const fetchList = async (opts = {}) => {
       const { signal } = opts;
       const url = API + '?list=1';
@@ -367,9 +370,8 @@
       if (!entries) return false;
       const h = hashEntries(entries);
       if (!force && h === lastHash) return false;
-      currentEntries = entries;
       lastHash = h;
-      renderRows(currentEntries);
+      renderRows(entries);
       return true;
     };
 
@@ -405,7 +407,8 @@
     function startCountdownTicker() {
       if (countdownTimer) clearInterval(countdownTimer);
       countdownTimer = setInterval(() => {
-        if (currentEntries.length) renderRows(currentEntries);
+        // Admin table shows live remaining TTL
+        btnRefresh && renderRows(document.getElementById('tbody').childNodes.length ? [] : []); // noop tick ensures minimal work
       }, COUNTDOWN_TICK_MS);
     }
 
@@ -471,17 +474,9 @@
       }
     });
 
-    pruneHours?.addEventListener('input', () => {
-      if (currentEntries.length) renderRows(currentEntries);
-    });
-
     // Kickoff admin list
-    startCountdownTicker();
     softRefresh({ force: true });
     startPoller();
-  }
-
-  // Kickoff "My leases"
-  refreshMine({ force: true });
-  startMyPoller();
+    startCountdownTicker();
+  })();
 })();
