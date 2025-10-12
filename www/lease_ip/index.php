@@ -4,8 +4,9 @@ require_once __DIR__ . '/../includes/web_functions.inc.php';
 set_page_access('auth');
 
 @session_start();
-global $IS_ADMIN;
+global $IS_ADMIN, $USER_ID;
 $isAdmin = !empty($IS_ADMIN);
+$username = $USER_ID ?? ($_SESSION['user_id'] ?? 'unknown');
 
 function canon_ip(?string $ip): ?string {
     if (!$ip) return null;
@@ -87,12 +88,15 @@ td.text-right .btn { margin-left:6px; }
 
   <!-- USER CARD -->
   <div class="panel panel-modern">
-    <div class="panel-heading text-center header-title">LEASE IP (INTERNAL)</div>
+    <div class="panel-heading text-center header-title">LEASE IP</div>
     <div class="panel-body">
       <div class="table-responsive">
-        <!-- add table-striped -->
         <table class="table table-striped table-modern">
           <tbody>
+          <tr>
+            <td>Signed in as</td>
+            <td><span class="badge-chip"><?php echo htmlspecialchars($username); ?></span></td>
+          </tr>
           <tr>
             <td>Detected client IP</td>
             <td>
@@ -116,6 +120,43 @@ td.text-right .btn { margin-left:6px; }
     </div>
   </div>
 
+  <!-- MY LEASES (visible to everyone; filtered by server for non-admins) -->
+  <div class="panel panel-modern" style="margin-top:22px;">
+    <div class="panel-heading">
+      <div class="header-inline">
+        <div class="grow">
+          <span class="header-title">MY LEASES</span>
+          <span class="header-count">COUNT: <span id="my-count">–</span></span>
+        </div>
+        <button id="my-refresh" class="btn btn-muted btn-pill">Refresh</button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="table-responsive">
+        <table class="table table-striped table-modern">
+          <thead>
+          <tr>
+            <th>User</th>
+            <th>Source</th>
+            <th>Timestamp</th>
+            <th>IP</th>
+            <th>Expiry</th>
+            <th class="text-right">Actions</th>
+          </tr>
+          </thead>
+          <tbody id="my-tbody"></tbody>
+          <tfoot>
+          <tr>
+            <td colspan="6">
+              <span id="my-status" class="smallprint"></span>
+            </td>
+          </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <?php if ($isAdmin): ?>
   <!-- ADMIN CARD -->
   <div class="panel panel-modern" style="margin-top:22px;">
@@ -130,11 +171,10 @@ td.text-right .btn { margin-left:6px; }
     </div>
     <div class="panel-body">
       <div class="table-responsive">
-        <!-- add table-striped -->
         <table class="table table-striped table-modern">
           <thead>
           <tr>
-            <th>Label</th>
+            <th>User</th>
             <th>Source</th>
             <th>Timestamp</th>
             <th>IP</th>
@@ -181,7 +221,8 @@ td.text-right .btn { margin-left:6px; }
 <script>
   window.LEASE_IP = {
     clientIp: <?php echo json_encode($clientIp); ?>,
-    isAdmin: <?php echo $isAdmin ? 'true' : 'false'; ?>
+    isAdmin: <?php echo $isAdmin ? 'true' : 'false'; ?>,
+    userId: <?php echo json_encode($username); ?>
   };
 </script>
 <script src="lease_ui.js"></script>
