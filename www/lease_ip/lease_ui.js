@@ -83,7 +83,7 @@
     } finally { setBusy(btnDel, false); }
   });
 
-  // === "MY LEASES" (only renders for non-admins; DOM won’t exist for admins) ==
+  // === "MY LEASES" (non-admins only; DOM won’t exist for admins) ============
   (function initMyLeasesIfPresent() {
     const myTbody = document.getElementById('my-tbody');
     if (!myTbody) return; // Admins won’t have this section
@@ -144,7 +144,7 @@
             await refreshMine({ force: true });
             myStatus.textContent = `Deleted ${ent.ip}`;
           } catch (e) {
-            myStatus.textContent = 'Delete failed: ' + e.message;
+            myStatus.textContent = 'Delete failed: ' + e.message';
           } finally { delBtn.disabled = false; }
         });
 
@@ -161,7 +161,9 @@
             myStatus.textContent = makeStatic ? `Marked static: ${ent.ip}` : `Unmarked static: ${ent.ip}`;
           } catch (e) {
             myStatus.textContent = 'Static toggle failed: ' + e.message;
-          } finally { staticBtn.disabled = false; }
+          } finally {
+            staticBtn.disabled = false;
+          }
         });
 
         tdAct.appendChild(delBtn);
@@ -241,7 +243,7 @@
     const manualStatic = document.getElementById('manual-static');
     const btnAddManual = document.getElementById('btn-add-manual');
 
-    let currentEntries = [];
+    let currentEntries = [];          // <<< keep last fetched list
     let lastHash = '';
     let lastEtag = '';
     let pollTimer = null;
@@ -370,8 +372,9 @@
       if (!entries) return false;
       const h = hashEntries(entries);
       if (!force && h === lastHash) return false;
+      currentEntries = entries;               // <<< keep copy for TTL re-render
       lastHash = h;
-      renderRows(entries);
+      renderRows(currentEntries);
       return true;
     };
 
@@ -385,6 +388,7 @@
         if (etag) lastEtag = etag;
 
         if (notModified) {
+          // No data change; still keep the table (currentEntries) as-is
           setStatus(`Up to date · ${new Date().toLocaleTimeString()}`);
         } else {
           const changed = applyEntriesIfChanged(entries, { force });
@@ -407,8 +411,8 @@
     function startCountdownTicker() {
       if (countdownTimer) clearInterval(countdownTimer);
       countdownTimer = setInterval(() => {
-        // Admin table shows live remaining TTL
-        btnRefresh && renderRows(document.getElementById('tbody').childNodes.length ? [] : []); // noop tick ensures minimal work
+        // Re-render current entries to refresh remaining TTL text — DO NOT clear table
+        if (currentEntries && currentEntries.length) renderRows(currentEntries);
       }, COUNTDOWN_TICK_MS);
     }
 
