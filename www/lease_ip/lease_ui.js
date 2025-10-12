@@ -237,3 +237,251 @@
     const btnPrune = document.getElementById('btn-prune');
     const pruneHours = document.getElementById('prune-hours');
     const adminStatus = document.getElementById('admin-status');
+    const manualIp = document.getElementById('manual-ip');
+    const manualStatic = document.getElementById('manual-static');
+    const btnAddManual = document.getElementById('btn-add-manual');
+
+    // --- State
+    let currentEntries = [];
+    let lastHash = '';
+    let lastEtag = '';
+    let pollTimer = null;
+    let countdownTimer = null;
+    let inFlight = null;  // AbortController for list fetch
+    let backoffMs = 0;
+
+    const POLL_VISIBLE_MS = 15000; // 15s when tab visible
+    const POLL_HIDDEN_MS  = 60000; // 60s when tab hidden
+    const COUNTDOWN_TICK_MS = 10000; // re-render remaining time every 10s
+
+    const setStatus = (msg) => { adminStatus.textContent = msg || ''; };
+
+    const renderRows = (entries) => {
+      tbody.innerHTML = '';
+      const ttlHrs = parseFloat(pruneHours?.value || '96');
+      const now = nowMs();
+
+      for (const ent of entries) {
+        const tr = document.createElement('tr');
+
+        const tdUser = document.createElement('td');
+        tdUser.textContent = ent.user || ent.label || ent.host || 'unknown';
+
+        const tdSource = document.createElement('td');
+        tdSource.textContent = (ent.source && String(ent.source).trim()) ? ent.source : '—';
+
+        const tdTs = document.createElement('td');
+        tdTs.textContent = ent.timestamp || '';
+
+        const tdIp = document.createElement('td');
+        tdIp.textContent = ent.ip || '';
+        if (ent.static === true) tdIp.textContent += ' (static)';
+
+        const tdExp = document.createElement('td');
+        let expText = '—';
+        let expTitle = '';
+        if (ent.static === true) {
+          expText = 'static';
+        } else {
+          const tsms = getTimestampMs(ent);
+          if (Number.isFinite(tsms)) {
+            const expAt = tsms + ttlHrs * 3600000;
+            expText = fmtRemaining(expAt - now);
+            expTitle = new Date(expAt).toLocaleString();
+          }
+        }
+        tdExp.textContent = expText;
+        if (expTitle) tdExp.title = expTitle;
+
+        const tdAct = document.createElement('td');
+        tdAct.className = 'text-right';
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.className = 'btn btn-default btn-sm';
+        delBtn.addEventListener('click', async () => {
+          delBtn.disabled = true;
+          try {
+            await callOne('delete', ent.ip);
+            await adminSoftRefresh({ force: true });
+            setStatus(`Deleted ${ent.ip}`);
+          } catch (e) {
+            setStatus('Delete failed: ' + e.message);
+          } finally {
+            delBtn.disabled = false;
+          }
+        });
+
+        const staticBtn = document.createElement('button');
+        staticBtn.textContent = (ent.static === true) ? 'Unset Static' : 'Set Static';
+        staticBtn.className = 'btn btn-default btn-sm';
+        staticBtn.style.marginLeft = '0.5rem';
+        staticBtn.addEventListener('click', async () => {
+          staticBtn.disabled = true;
+          try {
+            const makeStatic = !(ent.static === true);
+            await callOne('add', ent.ip, { 'X-LUM-Static': makeStatic ? '1' : '0' });
+            await adminSoftRefresh({ force: true });
+            setStatus(makeStatic ? `Marked static: ${ent.ip}` : `Unmarked static: ${ent.ip}`);
+          } catch (e) {
+            setStatus('Static toggle failed: ' + e.message);
+          } finally {
+            staticBtn.disabled = false;
+          }
+        });
+
+        tdAct.appendChild(delBtn);
+        tdAct.appendChild(staticBtn);
+
+        tr.appendChild(tdUser);
+        tr.appendChild(tdSource);
+        tr.appendChild(tdTs);
+        tr.appendChild(tdIp);
+        tr.appendChild(tdExp);
+        tr.appendChild(tdAct);
+        tbody.appendChild(tr);
+      }
+      count.textContent = String(entries.length);
+    };
+
+    const fetchList = async (opts = {}) => {
+      const { signal } = opts;
+      const url = API + '?list=1';
+      const headers = { 'Cache-Control': 'no-store' };
+      if (lastEtag) headers['If-None-Match'] = lastEtag;
+
+      const res = await fetch(url, { credentials: 'include', headers, signal });
+      if (res.status === 304) {
+        return { entries: null, etag: lastEtag, notModified: true };
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      let data;
+      try { data = await res.json(); } catch { throw new Error('Invalid JSON from API'); }
+      if (data.ok === false) throw new Error(data.error || 'API error');
+
+      const etag = res.headers.get('ETag') || '';
+      return { entries: (data.entries || []), etag, notModified: false };
+    };
+
+    const applyEntriesIfChanged = (entries, { force = false } = {}) => {
+      if (!entries) return false;
+      const h = hashEntries(entries);
+      if (!force && h === lastHash) return false;
+      currentEntries = entries;
+      lastHash = h;
+      renderRows(currentEntries);
+      return true;
+    };
+
+    async function softRefresh({ force = false } = {}) {
+      try { inFlight?.abort(); } catch {}
+      inFlight = new AbortController();
+
+      if (force) setStatus('Updating...'); else setStatus('');
+      try {
+        const { entries, etag, notModified } = await fetchList({ signal: inFlight.signal });
+        if (etag) lastEtag = etag;
+
+        if (notModified) {
+          setStatus(`Up to date · ${new Date().toLocaleTimeString()}`);
+        } else {
+          const changed = applyEntriesIfChanged(entries, { force });
+          setStatus(`Updated ${changed ? '' : '(no changes)'} · ${new Date().toLocaleTimeString()}`);
+        }
+        backoffMs = 0;
+      } catch (e) {
+        backoffMs = Math.min((backoffMs ? backoffMs * 2 : 2000), 60000);
+        setStatus(`Connection issue: ${e.message}. Retrying in ${Math.round(backoffMs / 1000)}s…`);
+        scheduleNextPoll(backoffMs);
+      }
+    }
+    adminSoftRefresh = softRefresh;
+
+    function pollIntervalMs() { return document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS; }
+    function clearPoller() { if (pollTimer) { clearTimeout(pollTimer); clearInterval(pollTimer); pollTimer = null; } }
+    function startPoller() { clearPoller(); pollTimer = setInterval(() => softRefresh({ force: false }), pollIntervalMs()); }
+    function scheduleNextPoll(ms) { clearPoller(); pollTimer = setTimeout(() => { softRefresh({ force: false }).finally(() => startPoller()); }, ms); }
+
+    function startCountdownTicker() {
+      if (countdownTimer) clearInterval(countdownTimer);
+      countdownTimer = setInterval(() => {
+        if (currentEntries.length) renderRows(currentEntries);
+      }, COUNTDOWN_TICK_MS);
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) { softRefresh({ force: true }).finally(startPoller); }
+      else { startPoller(); }
+    });
+
+    window.addEventListener('online', () => softRefresh({ force: true }));
+    window.addEventListener('offline', () => setStatus('Offline'));
+
+    btnRefresh?.setAttribute('title', 'Manual refresh (auto-refresh is on)');
+    btnRefresh?.addEventListener('click', () => softRefresh({ force: true }));
+
+    btnClear?.addEventListener('click', async () => {
+      if (!confirm('Clear ALL entries?')) return;
+      btnClear.disabled = true;
+      try {
+        await callOne('clear', '1');
+        await softRefresh({ force: true });
+        setStatus('Cleared all');
+      } catch (e) {
+        setStatus('Clear failed: ' + e.message);
+      } finally {
+        btnClear.disabled = false;
+      }
+    });
+
+    btnPrune?.addEventListener('click', async () => {
+      const n = parseInt(pruneHours.value, 10);
+      if (!(n > 0)) return setStatus('Enter a positive hour count.');
+      btnPrune.disabled = true;
+      try {
+        await callOne('prune', String(n));
+        await softRefresh({ force: true });
+        setStatus(`Pruned entries older than ${n} hours`);
+      } catch (e) {
+        setStatus('Prune failed: ' + e.message);
+      } finally {
+        btnPrune.disabled = false;
+      }
+    });
+
+    manualIp?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); btnAddManual?.click(); }
+    });
+
+    btnAddManual?.addEventListener('click', async () => {
+      const ip = (manualIp?.value || '').trim();
+      if (!ip) { setStatus('Enter an IP address.'); return; }
+      btnAddManual.disabled = true;
+      try {
+        const hdrs = manualStatic?.checked ? { 'X-LUM-Static': '1' } : undefined;
+        const r = await callOne('add', ip, hdrs);
+        await softRefresh({ force: true });
+        setStatus((r.result === 'exists') ? `Already present: ${r.ip}` : `Added: ${r.ip}`);
+        manualIp.value = '';
+        if (manualStatic) manualStatic.checked = false;
+      } catch (e) {
+        setStatus('Add failed: ' + e.message);
+      } finally {
+        btnAddManual.disabled = false;
+      }
+    });
+
+    pruneHours?.addEventListener('input', () => {
+      if (currentEntries.length) renderRows(currentEntries);
+    });
+
+    // Kickoff admin list
+    startCountdownTicker();
+    softRefresh({ force: true });
+    startPoller();
+  }
+
+  // Kickoff "My leases"
+  refreshMine({ force: true });
+  startMyPoller();
+})();
