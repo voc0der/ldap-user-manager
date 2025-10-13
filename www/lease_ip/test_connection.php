@@ -192,7 +192,7 @@ elseif ($format === 'iframe') {
         <div class="row"><span class="label">mTLS</span>
           <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
         </div>
-        <div class="row"><span class="label">Whitelisted IP</span>
+        <div class="row"><span class="label">Leased IP</span>
           <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
         </div>
       </div>
@@ -285,7 +285,7 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
         <span class="<?php echo $onVpn ? 'flag-yes':'flag-no'; ?>"><?php echo $onVpn ? '✅' : '❌'; ?></span>
       </div>
       <div class="kv">
-        <span>Your device is using a whitelisted IP.</span>
+        <span>Your device is using a Leased IP.</span>
         <span class="<?php echo $isWhitelisted ? 'flag-yes':'flag-no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
       </div>
       <div class="kv">
@@ -309,7 +309,7 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
       <?php if ($isAdmin && $isWhitelisted && $wlMatch): ?>
         <hr class="soft" />
         <div class="smallprint">
-          Whitelist match:
+          Lease match:
           <?php if (!empty($wlMatch['label'])): ?> label <code><?php echo h((string)$wlMatch['label']); ?></code><?php endif; ?>
           <?php if (!empty($wlMatch['source'])): ?> • source <code><?php echo h((string)$wlMatch['source']); ?></code><?php endif; ?>
           <?php if (!empty($wlMatch['timestamp'])): ?> • since <code><?php echo h((string)$wlMatch['timestamp']); ?></code><?php endif; ?>
