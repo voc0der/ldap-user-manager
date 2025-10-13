@@ -84,7 +84,10 @@ function current_host_url(): string {
 }
 
 /* -------------------- inputs + detection -------------------- */
-$format   = (strtolower((string)($_GET['format'] ?? 'html')) === 'json') ? 'json' : 'html';
+$format = strtolower((string)($_GET['format'] ?? 'html'));
+if (!in_array($format, ['html','json','iframe'], true)) {
+    $format = 'html';
+}
 $showMenu = !in_array(strtolower((string)($_GET['render_menu'] ?? '1')), ['0','no','false'], true);
 
 $clientIp = get_client_ip() ?: '0.0.0.0';
