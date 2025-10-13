@@ -189,10 +189,21 @@ elseif ($format === 'iframe') {
         .label{font-weight:600; letter-spacing:.2px}
         .yes{font-weight:700}
         .no{font-weight:700}
-        /* inline action next to the icon */
+
+        /* inline value container so we can position button and icon cleanly */
         .val{display:inline-flex; align-items:center; gap:8px;}
-        .btn{border:1px solid var(--border); background:transparent; padding:6px 10px; border-radius:8px; cursor:pointer}
-        .btn[disabled]{opacity:.6; cursor:not-allowed}
+
+        /* high-contrast button for both themes */
+        .btn{display:inline-block; text-decoration:none; line-height:1; padding:8px 12px; border-radius:9px; font-weight:600; cursor:pointer; user-select:none; -webkit-tap-highlight-color:transparent;}
+        @media (prefers-color-scheme: dark){
+          .btn{ background:rgba(127,209,255,.14); color:#a9e1ff; border:1px solid rgba(127,209,255,.45); }
+          .btn:hover,.btn:active{ background:rgba(127,209,255,.22); }
+        }
+        @media (prefers-color-scheme: light){
+          .btn{ background:rgba(0,123,255,.10); color:#0b63c7; border:1px solid rgba(0,123,255,.40); }
+          .btn:hover,.btn:active{ background:rgba(0,123,255,.16); }
+        }
+        .btn[aria-busy="true"]{opacity:.7; pointer-events:none}
       </style>
     </head>
     <body>
@@ -206,35 +217,45 @@ elseif ($format === 'iframe') {
         <div class="row"><span class="label">mTLS</span>
           <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
         </div>
-        <div class="row"><span class="label">Leased IP</span>
+
+        <!-- Leased IP row: button on the other side of the X (button first, then icon) -->
+        <div class="row">
+          <span class="label">Leased IP</span>
           <span class="val">
-            <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
             <?php if ($allNo && $isV4): ?>
-              <button id="leaseBtn" class="btn" title="Lease the current IP">Lease this IP</button>
+              <a id="leaseBtn" class="btn" href="<?php echo h($leaseActionUrl); ?>" role="button" aria-label="Lease this IP">Lease this IP</a>
             <?php endif; ?>
+            <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
           </span>
         </div>
       </div>
 
       <?php if ($allNo && $isV4): ?>
       <script>
-        (function () {
+        (function(){
           var btn = document.getElementById('leaseBtn');
           if (!btn) return;
-          var url = <?php echo json_encode($leaseActionUrl, JSON_UNESCAPED_SLASHES); ?>;
-          btn.addEventListener('click', function (e) {
-            e.preventDefault();
-            btn.disabled = true;
+          var url = btn.getAttribute('href');
+          btn.addEventListener('click', function(ev){
+            ev.preventDefault();
+            btn.setAttribute('aria-busy', 'true');
             btn.textContent = 'Leasing…';
-            // fire-and-forget via image beacon (no CORS headaches), then reload
+
+            var finish = function(){ setTimeout(function(){ location.reload(); }, 900); };
+
             try {
-              var img = new Image();
-              img.onload = img.onerror = function () {
-                setTimeout(function () { location.reload(); }, 900);
-              };
-              img.src = url + (url.indexOf('?') > -1 ? '&' : '?') + 'px=' + Date.now();
-            } catch (_) {
-              setTimeout(function () { location.reload(); }, 900);
+              if (window.fetch) {
+                // Fire-and-forget GET; response ignored (no-cors)
+                fetch(url + (url.indexOf('?')>-1 ? '&':'?') + 'px=' + Date.now(), { mode:'no-cors', credentials:'include' })
+                  .catch(function(){ /* ignore */ })
+                  .finally(finish);
+              } else {
+                var img = new Image();
+                img.onload = img.onerror = finish;
+                img.src = url + (url.indexOf('?')>-1 ? '&':'?') + 'px=' + Date.now();
+              }
+            } catch (_){
+              finish();
             }
           });
         })();
