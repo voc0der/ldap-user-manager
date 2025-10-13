@@ -128,8 +128,8 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
 }
 
 /* Conservative inference: only if external + not VPN + not whitelisted and no header */
-$mtlsAssumed = (!$mtlsDetected && !$inLan && !$onVpn && !$isWhitelisted);
-$usingMtls   = $mtlsDetected || $mtlsAssumed;
+/* mTLS is header-only (no inference) */
+$usingMtls = $mtlsDetected;
 
 /* -------------------- render -------------------- */
 if ($format === 'json') {
@@ -145,10 +145,8 @@ if ($format === 'json') {
             'using_mtls'           => $usingMtls,
         ],
         'mtls' => [
-            'header'     => $mtlsHeader ?: null,
-            'detected'   => $mtlsDetected,
-            'assumed'    => $mtlsAssumed,
-            'explanation'=> $mtlsDetected ? 'X-MTLS:on' : ($mtlsAssumed ? 'External & not VPN & not whitelisted' : 'Not detected'),
+            'header'   => $mtlsHeader ?: null,
+            'detected' => $mtlsDetected,
         ],
         'lease_api' => [
             'url' => $leaseUrl,
@@ -242,8 +240,6 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
       <div class="smallprint hint">
         <?php if ($mtlsDetected): ?>
           mTLS <b>detected</b> via header <code>X-MTLS</code>=<code>on</code>.
-        <?php elseif ($mtlsAssumed): ?>
-          mTLS <b>assumed</b> because the client appears external, not on VPN, and not whitelisted.
         <?php else: ?>
           mTLS not detected on this path.
         <?php endif; ?>
