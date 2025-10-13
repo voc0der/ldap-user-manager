@@ -105,8 +105,8 @@ $mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
 $mtlsDetected = in_array($mtlsHeader, ['on','1','true'], true);
 
 /* Whitelist (independent flag) via lease API */
-$defaultLeaseUrl = rtrim(current_host_url(), '/') . '/endpoints/lease_ip.php?list=1';
-$leaseUrl = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_URL') ?: $defaultLeaseUrl));
+$base = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_BASE') ?: (rtrim(current_host_url(), '/') . '/endpoints/lease_ip.php')));
+$leaseUrl = (function($u){$q=parse_url($u,PHP_URL_QUERY);return ($q && preg_match('/(?:^|&)list=1(?:&|$)/',(string)$q))?$u:$u.(strpos($u,'?')!==false?'&':'?').'list=1';})($base);
 
 $isWhitelisted = false;
 $wlMatch = null;
