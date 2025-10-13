@@ -35,8 +35,7 @@ function ip_in_cidr(string $ip, string $cidr): bool {
     $ipBin  = @inet_pton($ip);
     $subBin = @inet_pton($sub);
     if ($ipBin === false || $subBin === false) return false;
-    $len = strlen($ipBin);
-    if ($len !== strlen($subBin)) return false; // v4 vs v6 mismatch
+    if (strlen($ipBin) !== strlen($subBin)) return false; // v4 vs v6 mismatch
     $bytes = intdiv($bits, 8);
     $rem   = $bits % 8;
     if ($bytes && substr($ipBin, 0, $bytes) !== substr($subBin, 0, $bytes)) return false;
@@ -54,7 +53,6 @@ function ip_in_any_cidr(string $ip, array $cidrs): bool {
     return false;
 }
 function parse_cidr_list(string $spec): array {
-    // comma, semicolon, or whitespace separated
     $spec = trim($spec);
     if ($spec === '') return [];
     $parts = preg_split('/[,\s;]+/', $spec, -1, PREG_SPLIT_NO_EMPTY);
@@ -67,7 +65,7 @@ function fetch_json(string $url): array {
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_CONNECTTIMEOUT => 2,
         CURLOPT_TIMEOUT        => 3,
-        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.1',
+        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.2',
         CURLOPT_HTTPHEADER     => ['Accept: application/json'],
     ]);
     $body = curl_exec($ch);
@@ -86,7 +84,8 @@ function current_host_url(): string {
 }
 
 /* -------------------- inputs + detection -------------------- */
-$format = (strtolower((string)($_GET['format'] ?? 'html')) === 'json') ? 'json' : 'html';
+$format   = (strtolower((string)($_GET['format'] ?? 'html')) === 'json') ? 'json' : 'html';
+$showMenu = !in_array(strtolower((string)($_GET['render_menu'] ?? '1')), ['0','no','false'], true);
 
 $clientIp = get_client_ip() ?: '0.0.0.0';
 $isV4     = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
@@ -96,16 +95,16 @@ $lanCidrs = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
 $inLan    = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
 
 /* VPN CIDR(s) from env (independent flag). Default to 10.2.4.0/24. */
-$vpnSpec = getenv('VPN_CIDR') ?: '10.2.4.0/24';
+$vpnSpec  = getenv('VPN_CIDR') ?: '10.2.4.0/24';
 $vpnCidrs = parse_cidr_list($vpnSpec);
 $onVpn    = $isV4 && !empty($vpnCidrs) && ip_in_any_cidr($clientIp, $vpnCidrs);
 
-/* mTLS (independent flag): prefer explicit header from nginx location / */
+/* mTLS (independent flag): explicit header only */
 $mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
-$mtlsDetected = in_array($mtlsHeader, ['on','1','true'], true);
+$usingMtls    = in_array($mtlsHeader, ['on','1','true'], true);
 
-/* Whitelist (independent flag) via lease API */
-$base = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_BASE') ?: (rtrim(current_host_url(), '/') . '/endpoints/lease_ip.php')));
+/* Whitelist (independent flag) via lease API built from LEASE_API_BASE */
+$base     = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_BASE') ?: (rtrim(current_host_url(), '/') . '/endpoints/lease_ip.php')));
 $leaseUrl = (function($u){$q=parse_url($u,PHP_URL_QUERY);return ($q && preg_match('/(?:^|&)list=1(?:&|$)/',(string)$q))?$u:$u.(strpos($u,'?')!==false?'&':'?').'list=1';})($base);
 
 $isWhitelisted = false;
@@ -127,18 +126,14 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
     }
 }
 
-/* Conservative inference: only if external + not VPN + not whitelisted and no header */
-/* mTLS is header-only (no inference) */
-$usingMtls = $mtlsDetected;
-
 /* -------------------- render -------------------- */
 if ($format === 'json') {
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
-        'ok' => true,
-        'user' => $username,
+        'ok'        => true,
+        'user'      => $username,
         'client_ip' => $clientIp,
-        'flags' => [
+        'flags'     => [
             'in_lan'               => $inLan,
             'on_vpn'               => $onVpn,
             'using_whitelisted_ip' => $isWhitelisted,
@@ -146,14 +141,14 @@ if ($format === 'json') {
         ],
         'mtls' => [
             'header'   => $mtlsHeader ?: null,
-            'detected' => $mtlsDetected,
+            'detected' => $usingMtls,
         ],
         'lease_api' => [
-            'url' => $leaseUrl,
-            'ok'  => $wlOk,
-            'http'=> $wlHttp,
-            'err' => $wlOk ? null : $wlErr,
-            'match'=> $wlMatch,
+            'url'   => $leaseUrl,
+            'ok'    => $wlOk,
+            'http'  => $wlHttp,
+            'err'   => $wlOk ? null : $wlErr,
+            'match' => $wlMatch,
         ],
         'vpn_cidrs' => $vpnCidrs,
         'ts' => date('Y-m-d H:i:s T'),
@@ -162,6 +157,11 @@ if ($format === 'json') {
 }
 
 render_header('Test Connection');
+
+/* Hide the top menu/nav when render_menu=0 (useful for iframes) */
+if (!$showMenu) {
+    echo '<style>.navbar, .breadcrumb, .page-header{display:none!important;} body{padding-top:0!important;}</style>';
+}
 ?>
 <style>
 /* ---------- Cyberpunk-ish chrome (Bootstrap 3 friendly) ---------- */
@@ -186,8 +186,11 @@ render_header('Test Connection');
 .table-modern.table-striped>tbody>tr:nth-of-type(even) { background: rgba(255,255,255,.015); }
 .table-modern>tbody>tr:hover td { background: rgba(255,255,255,.06); }
 
-.badge-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-family:monospace; font-size:.95em;
+/* Readability for first-column labels */
+.key { color:#e2f1ff; font-weight:700; letter-spacing:.2px; }
+.badge-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-family:monospace; font-size:.98em;
   background:#1a2b3a; color:#a9e1ff; border:1px solid rgba(127,209,255,.35); }
+
 .smallprint { color:#8aa0b2; font-size:12px; }
 .flag-yes { color:#10b981; font-weight:700; }
 .flag-no  { color:#ef4444; font-weight:700; }
@@ -195,6 +198,14 @@ render_header('Test Connection');
 .kv + .kv { margin-top:8px; }
 .hint { margin-top:10px; }
 hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
+
+/* Mobile tweaks: larger label text & spacing */
+@media (max-width: 768px) {
+  .panel-modern .panel-body { padding:12px; }
+  .table-modern>tbody>tr>td { padding:10px 8px; }
+  .key { font-size:14px; }
+  .badge-chip { font-size:1.05em; }
+}
 </style>
 
 <div class="container conn-wrap">
@@ -206,11 +217,11 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
         <table class="table table-modern">
           <tbody>
           <tr>
-            <td>Signed in as</td>
+            <td class="key">Signed in as</td>
             <td><span class="badge-chip"><?php echo h($username); ?></span></td>
           </tr>
           <tr>
-            <td>Detected client IP</td>
+            <td class="key">Detected client IP</td>
             <td><span class="badge-chip"><?php echo h($clientIp); ?></span></td>
           </tr>
           </tbody>
@@ -237,17 +248,20 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
         <span class="<?php echo $usingMtls ? 'flag-yes':'flag-no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
       </div>
 
+      <!-- Hint line: simplified for non-admins; detailed for admins -->
       <div class="smallprint hint">
-        <?php if ($mtlsDetected): ?>
+        <?php if ($usingMtls): ?>
           mTLS <b>detected</b> via header <code>X-MTLS</code>=<code>on</code>.
         <?php else: ?>
           mTLS not detected on this path.
         <?php endif; ?>
-        &nbsp;•&nbsp; VPN CIDR(s): <code><?php echo h(implode(', ', $vpnCidrs) ?: '—'); ?></code>
-        &nbsp;•&nbsp; Lease API: <code><?php echo h($leaseUrl); ?></code>
+        <?php if ($isAdmin): ?>
+          &nbsp;•&nbsp; VPN CIDR(s): <code><?php echo h(implode(', ', $vpnCidrs) ?: '—'); ?></code>
+          &nbsp;•&nbsp; Lease API: <code><?php echo h($leaseUrl); ?></code>
+        <?php endif; ?>
       </div>
 
-      <?php if ($isWhitelisted && $wlMatch): ?>
+      <?php if ($isAdmin && $isWhitelisted && $wlMatch): ?>
         <hr class="soft" />
         <div class="smallprint">
           Whitelist match:
@@ -258,7 +272,7 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
         </div>
       <?php endif; ?>
 
-      <?php if (!$wlOk): ?>
+      <?php if ($isAdmin && !$wlOk): ?>
         <div class="smallprint" style="margin-top:8px;">
           Lease API lookup: <b>unavailable</b> (HTTP <?php echo (int)$wlHttp; ?><?php echo $wlErr ? ', ' . h($wlErr) : ''; ?>).
           Status shown without whitelist info.
