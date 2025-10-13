@@ -1,0 +1,221 @@
+<?php
+declare(strict_types=1);
+require_once __DIR__ . '/../includes/web_functions.inc.php';
+set_page_access('auth');
+
+@session_start();
+global $IS_ADMIN, $USER_ID;
+$isAdmin  = !empty($IS_ADMIN);
+$username = $USER_ID ?? ($_SESSION['user_id'] ?? 'unknown');
+
+/* -------------------- helpers -------------------- */
+function h(?string $s): string {
+    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+function canon_ip(?string $ip): ?string {
+    if (!$ip) return null;
+    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_IPV6)) return null;
+    $bin = @inet_pton($ip);
+    return $bin === false ? null : @inet_ntop($bin);
+}
+function get_client_ip(): ?string {
+    $candidates = [];
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $p) $candidates[] = trim($p);
+    }
+    if (!empty($_SERVER['HTTP_X_REAL_IP'])) $candidates[] = trim($_SERVER['HTTP_X_REAL_IP']);
+    if (!empty($_SERVER['REMOTE_ADDR']))    $candidates[] = trim($_SERVER['REMOTE_ADDR']);
+    foreach ($candidates as $v) if ($v = canon_ip($v)) return $v;
+    return null;
+}
+/** Simple IPv4 CIDR check (fits our LAN/VPN rules). */
+function ip4_in_cidr(string $ip, string $cidr): bool {
+    if (strpos($cidr, '/') === false) return $ip === $cidr;
+    [$subnet, $maskBits] = explode('/', $cidr, 2);
+    $maskBits = (int)$maskBits;
+    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
+        !filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
+        $maskBits < 0 || $maskBits > 32) return false;
+    $ipLong  = ip2long($ip);
+    $netLong = ip2long($subnet);
+    $mask    = $maskBits === 0 ? 0 : (~0 << (32 - $maskBits)) & 0xFFFFFFFF;
+    return ($ipLong & $mask) === ($netLong & $mask);
+}
+/** Fetch JSON with short timeouts. Returns [ok, array|null, httpCode, err]. */
+function fetch_json(string $url): array {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT        => 3,
+        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.0',
+        CURLOPT_HTTPHEADER     => ['Accept: application/json'],
+    ]);
+    $body = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($body === false || $code < 200 || $code >= 300) return [false, null, $code, $err ?: 'http_error'];
+    $data = json_decode($body, true);
+    if (!is_array($data)) return [false, null, $code, 'invalid_json'];
+    return [true, $data, $code, ''];
+}
+function current_host_url(): string {
+    $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443');
+    return ($https ? 'https://' : 'http://') . $host;
+}
+
+/* -------------------- inputs + detection -------------------- */
+$clientIp = get_client_ip();
+$clientIp = $clientIp ?: '0.0.0.0';
+
+$isV4   = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
+$inLan  = $isV4 && ip4_in_cidr($clientIp, '192.168.0.0/16');  // "Class C" LAN per your rule
+$onVpn  = $isV4 && ip4_in_cidr($clientIp, '10.2.4.0/24');     // VPN slice
+if ($onVpn) $inLan = false;                                   // disambiguate
+
+// mTLS signal (preferred): header injected by nginx location /
+$mtlsHeader = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
+$mtlsDetected = ($mtlsHeader === 'on' || $mtlsHeader === '1' || $mtlsHeader === 'true');
+
+// Whitelist check via lease API
+$defaultLeaseUrl = rtrim(current_host_url(), '/') . '/endpoints/lease_ip.php?list=1';
+$leaseUrl = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_URL') ?: $defaultLeaseUrl));
+
+$isWhitelisted = false;
+$wlMatch = null;
+list($wlOk, $wlPayload, $wlHttp, $wlErr) = fetch_json($leaseUrl);
+if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
+    foreach ($wlPayload['entries'] as $e) {
+        if (!isset($e['ip'])) continue;
+        if ((string)$e['ip'] === $clientIp) {
+            $isWhitelisted = true;
+            $wlMatch = [
+                'label'     => $e['label'] ?? null,
+                'timestamp' => $e['timestamp'] ?? null,
+                'source'    => $e['source'] ?? null,
+                'static'    => (bool)($e['static'] ?? false),
+            ];
+            break;
+        }
+    }
+}
+
+// If no header available, infer mTLS when not LAN, not VPN, not whitelisted.
+$mtlsAssumed = (!$mtlsDetected && !$inLan && !$onVpn && !$isWhitelisted);
+$usingMtls   = $mtlsDetected || $mtlsAssumed;
+
+/* -------------------- theming + render -------------------- */
+render_header('Test Connection');
+?>
+<style>
+/* ---------- Cyberpunk-ish chrome (Bootstrap 3 friendly) ---------- */
+.conn-wrap { max-width: 860px; margin: 18px auto 40px; }
+.panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
+.panel-modern .panel-heading {
+  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+  color:#cfe9ff; font-weight:600; letter-spacing:.4px; text-transform:uppercase;
+  padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.08);
+}
+.panel-modern .panel-body { padding:14px; }
+
+.table-modern { margin:0; }
+.table-modern>thead>tr>th,
+.table-modern>tbody>tr>td,
+.table-modern tfoot td { border-color: rgba(255,255,255,.08); }
+
+.table-modern>thead>tr>th {
+  color:#9fb6c9; font-size:12px; text-transform:uppercase; letter-spacing:.35px; border-bottom-width:1px;
+}
+.table-modern.table-striped>tbody>tr:nth-of-type(odd)  { background: rgba(255,255,255,.03); }
+.table-modern.table-striped>tbody>tr:nth-of-type(even) { background: rgba(255,255,255,.015); }
+.table-modern>tbody>tr:hover td { background: rgba(255,255,255,.06); }
+
+.badge-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-family:monospace; font-size:.95em;
+  background:#1a2b3a; color:#a9e1ff; border:1px solid rgba(127,209,255,.35); }
+.smallprint { color:#8aa0b2; font-size:12px; }
+.flag-yes { color:#10b981; font-weight:700; }
+.flag-no  { color:#ef4444; font-weight:700; }
+.kv { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-radius:10px; }
+.kv + .kv { margin-top:8px; }
+.hint { margin-top:10px; }
+hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
+</style>
+
+<div class="container conn-wrap">
+
+  <div class="panel panel-modern">
+    <div class="panel-heading text-center">CONNECTION CHECK</div>
+    <div class="panel-body">
+      <div class="table-responsive">
+        <table class="table table-modern">
+          <tbody>
+          <tr>
+            <td>Signed in as</td>
+            <td><span class="badge-chip"><?php echo h($username); ?></span></td>
+          </tr>
+          <tr>
+            <td>Detected client IP</td>
+            <td><span class="badge-chip"><?php echo h($clientIp); ?></span></td>
+          </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <hr class="soft" />
+
+      <!-- Verdicts -->
+      <div class="kv">
+        <span>Your device is inside the LAN.</span>
+        <span class="<?php echo $inLan ? 'flag-yes':'flag-no'; ?>"><?php echo $inLan ? '✅' : '❌'; ?></span>
+      </div>
+      <div class="kv">
+        <span>Your device is on the VPN.</span>
+        <span class="<?php echo $onVpn ? 'flag-yes':'flag-no'; ?>"><?php echo $onVpn ? '✅' : '❌'; ?></span>
+      </div>
+      <div class="kv">
+        <span>Your device is using a whitelisted IP.</span>
+        <span class="<?php echo $isWhitelisted ? 'flag-yes':'flag-no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
+      </div>
+      <div class="kv">
+        <span>Your device is pinning a mTLS certificate.</span>
+        <span class="<?php echo $usingMtls ? 'flag-yes':'flag-no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
+      </div>
+
+      <div class="smallprint hint">
+        <?php if ($mtlsDetected): ?>
+          mTLS <b>detected</b> via proxy header <code>X-MTLS</code>=<code>on</code>.
+        <?php elseif ($mtlsAssumed): ?>
+          mTLS <b>assumed</b>: not LAN, not VPN, and not whitelisted.
+        <?php else: ?>
+          mTLS not detected or required for this path.
+        <?php endif; ?>
+        &nbsp;•&nbsp; Lease source: <code><?php echo h($leaseUrl); ?></code>
+      </div>
+
+      <?php if ($isWhitelisted && $wlMatch): ?>
+        <hr class="soft" />
+        <div class="smallprint">
+          Whitelist match:
+          <?php if (!empty($wlMatch['label'])): ?> label <code><?php echo h((string)$wlMatch['label']); ?></code><?php endif; ?>
+          <?php if (!empty($wlMatch['source'])): ?> • source <code><?php echo h((string)$wlMatch['source']); ?></code><?php endif; ?>
+          <?php if (!empty($wlMatch['timestamp'])): ?> • since <code><?php echo h((string)$wlMatch['timestamp']); ?></code><?php endif; ?>
+          <?php if (array_key_exists('static',$wlMatch) && $wlMatch['static']): ?> • <code>static</code><?php endif; ?>
+        </div>
+      <?php endif; ?>
+
+      <?php if (!$wlOk): ?>
+        <div class="smallprint" style="margin-top:8px;">
+          Lease API lookup: <b>unavailable</b> (HTTP <?php echo (int)$wlHttp; ?><?php echo $wlErr ? ', ' . h($wlErr) : ''; ?>).
+          Status shown without whitelist info.
+        </div>
+      <?php endif; ?>
+
+    </div>
+  </div>
+</div>
+
+<?php render_footer(); ?>
