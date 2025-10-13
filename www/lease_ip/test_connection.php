@@ -129,6 +129,16 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
     }
 }
 
+/* ---- Inline Lease action (for iframe) ---- */
+$allNo = (!$inLan && !$onVpn && !$usingMtls && !$isWhitelisted);
+$leaseActionBase = $base; // same endpoint, without forcing list=1
+$leaseActionUrl  = $leaseActionBase
+                 . (strpos($leaseActionBase, '?') !== false ? '&' : '?')
+                 . 'add=1'
+                 . '&ip='     . rawurlencode($clientIp)
+                 . '&source=' . rawurlencode('lum-conn-test-iframe')
+                 . '&label='  . rawurlencode($username);
+
 /* -------------------- render -------------------- */
 if ($format === 'json') {
     header('Content-Type: application/json; charset=utf-8');
@@ -179,6 +189,10 @@ elseif ($format === 'iframe') {
         .label{font-weight:600; letter-spacing:.2px}
         .yes{font-weight:700}
         .no{font-weight:700}
+        /* inline action next to the icon */
+        .val{display:inline-flex; align-items:center; gap:8px;}
+        .btn{border:1px solid var(--border); background:transparent; padding:6px 10px; border-radius:8px; cursor:pointer}
+        .btn[disabled]{opacity:.6; cursor:not-allowed}
       </style>
     </head>
     <body>
@@ -193,9 +207,39 @@ elseif ($format === 'iframe') {
           <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
         </div>
         <div class="row"><span class="label">Leased IP</span>
-          <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
+          <span class="val">
+            <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
+            <?php if ($allNo && $isV4): ?>
+              <button id="leaseBtn" class="btn" title="Lease the current IP">Lease this IP</button>
+            <?php endif; ?>
+          </span>
         </div>
       </div>
+
+      <?php if ($allNo && $isV4): ?>
+      <script>
+        (function () {
+          var btn = document.getElementById('leaseBtn');
+          if (!btn) return;
+          var url = <?php echo json_encode($leaseActionUrl, JSON_UNESCAPED_SLASHES); ?>;
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            btn.disabled = true;
+            btn.textContent = 'Leasing…';
+            // fire-and-forget via image beacon (no CORS headaches), then reload
+            try {
+              var img = new Image();
+              img.onload = img.onerror = function () {
+                setTimeout(function () { location.reload(); }, 900);
+              };
+              img.src = url + (url.indexOf('?') > -1 ? '&' : '?') + 'px=' + Date.now();
+            } catch (_) {
+              setTimeout(function () { location.reload(); }, 900);
+            }
+          });
+        })();
+      </script>
+      <?php endif; ?>
     </body>
     </html>
     <?php
