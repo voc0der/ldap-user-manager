@@ -155,7 +155,49 @@ if ($format === 'json') {
     ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 }
-
+elseif ($format === 'iframe') {
+    header('Content-Type: text/html; charset=utf-8');
+    ?>
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width,initial-scale=1" />
+      <style>
+        :root { --fg:#0a0a0a; --muted:#6b7280; --card:#ffffff; --border:rgba(0,0,0,.08); }
+        @media (prefers-color-scheme: dark) {
+          :root { --fg:#e5e7eb; --muted:#94a3b8; --card:#0b0f13; --border:rgba(255,255,255,.08); }
+        }
+        *{box-sizing:border-box}
+        body{margin:0; background:transparent; color:var(--fg); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial}
+        .micro{padding:10px 12px; border-radius:12px; background:var(--card); border:1px solid var(--border)}
+        .row{display:flex; justify-content:space-between; align-items:center; padding:8px 0}
+        .row+.row{border-top:1px solid var(--border)}
+        .label{font-weight:600; letter-spacing:.2px}
+        .yes{font-weight:700}
+        .no{font-weight:700}
+      </style>
+    </head>
+    <body>
+      <div class="micro">
+        <div class="row"><span class="label">Inside LAN</span>
+          <span class="<?php echo $inLan ? 'yes' : 'no'; ?>"><?php echo $inLan ? '✅' : '❌'; ?></span>
+        </div>
+        <div class="row"><span class="label">On VPN</span>
+          <span class="<?php echo $onVpn ? 'yes' : 'no'; ?>"><?php echo $onVpn ? '✅' : '❌'; ?></span>
+        </div>
+        <div class="row"><span class="label">mTLS</span>
+          <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
+        </div>
+        <div class="row"><span class="label">Whitelisted IP</span>
+          <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
+        </div>
+      </div>
+    </body>
+    </html>
+    <?php
+    exit;
+}
 render_header('Test Connection');
 
 /* Hide the top menu/nav when render_menu=0 (useful for iframes) */
