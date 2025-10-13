@@ -28,20 +28,38 @@ function get_client_ip(): ?string {
     foreach ($candidates as $v) if ($v = canon_ip($v)) return $v;
     return null;
 }
-/** Simple IPv4 CIDR check (fits our LAN/VPN rules). */
-function ip4_in_cidr(string $ip, string $cidr): bool {
+function ip_in_cidr(string $ip, string $cidr): bool {
     if (strpos($cidr, '/') === false) return $ip === $cidr;
-    [$subnet, $maskBits] = explode('/', $cidr, 2);
-    $maskBits = (int)$maskBits;
-    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
-        !filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ||
-        $maskBits < 0 || $maskBits > 32) return false;
-    $ipLong  = ip2long($ip);
-    $netLong = ip2long($subnet);
-    $mask    = $maskBits === 0 ? 0 : (~0 << (32 - $maskBits)) & 0xFFFFFFFF;
-    return ($ipLong & $mask) === ($netLong & $mask);
+    [$sub, $bits] = explode('/', $cidr, 2);
+    $bits = (int)$bits;
+    $ipBin  = @inet_pton($ip);
+    $subBin = @inet_pton($sub);
+    if ($ipBin === false || $subBin === false) return false;
+    $len = strlen($ipBin);
+    if ($len !== strlen($subBin)) return false; // v4 vs v6 mismatch
+    $bytes = intdiv($bits, 8);
+    $rem   = $bits % 8;
+    if ($bytes && substr($ipBin, 0, $bytes) !== substr($subBin, 0, $bytes)) return false;
+    if ($rem) {
+        $mask = chr((0xFF00 >> $rem) & 0xFF);
+        if ((ord($ipBin[$bytes]) & ord($mask)) !== (ord($subBin[$bytes]) & ord($mask))) return false;
+    }
+    return true;
 }
-/** Fetch JSON with short timeouts. Returns [ok, array|null, httpCode, err]. */
+function ip_in_any_cidr(string $ip, array $cidrs): bool {
+    foreach ($cidrs as $c) {
+        $c = trim($c);
+        if ($c !== '' && ip_in_cidr($ip, $c)) return true;
+    }
+    return false;
+}
+function parse_cidr_list(string $spec): array {
+    // comma, semicolon, or whitespace separated
+    $spec = trim($spec);
+    if ($spec === '') return [];
+    $parts = preg_split('/[,\s;]+/', $spec, -1, PREG_SPLIT_NO_EMPTY);
+    return array_values(array_unique(array_map('trim', $parts)));
+}
 function fetch_json(string $url): array {
     $ch = curl_init($url);
     curl_setopt_array($ch, [
@@ -49,14 +67,13 @@ function fetch_json(string $url): array {
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_CONNECTTIMEOUT => 2,
         CURLOPT_TIMEOUT        => 3,
-        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.0',
+        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.1',
         CURLOPT_HTTPHEADER     => ['Accept: application/json'],
     ]);
     $body = curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
     $err  = curl_error($ch);
     curl_close($ch);
-
     if ($body === false || $code < 200 || $code >= 300) return [false, null, $code, $err ?: 'http_error'];
     $data = json_decode($body, true);
     if (!is_array($data)) return [false, null, $code, 'invalid_json'];
@@ -69,19 +86,25 @@ function current_host_url(): string {
 }
 
 /* -------------------- inputs + detection -------------------- */
-$clientIp = get_client_ip();
-$clientIp = $clientIp ?: '0.0.0.0';
+$format = (strtolower((string)($_GET['format'] ?? 'html')) === 'json') ? 'json' : 'html';
 
-$isV4   = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
-$inLan  = $isV4 && ip4_in_cidr($clientIp, '192.168.0.0/16');  // "Class C" LAN per your rule
-$onVpn  = $isV4 && ip4_in_cidr($clientIp, '10.2.4.0/24');     // VPN slice
-if ($onVpn) $inLan = false;                                   // disambiguate
+$clientIp = get_client_ip() ?: '0.0.0.0';
+$isV4     = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 
-// mTLS signal (preferred): header injected by nginx location /
-$mtlsHeader = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
-$mtlsDetected = ($mtlsHeader === 'on' || $mtlsHeader === '1' || $mtlsHeader === 'true');
+/* LAN = any RFC1918 IPv4 + localhost (independent flag) */
+$lanCidrs = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
+$inLan    = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
 
-// Whitelist check via lease API
+/* VPN CIDR(s) from env (independent flag). Default to 10.2.4.0/24. */
+$vpnSpec = getenv('VPN_CIDR') ?: '10.2.4.0/24';
+$vpnCidrs = parse_cidr_list($vpnSpec);
+$onVpn    = $isV4 && !empty($vpnCidrs) && ip_in_any_cidr($clientIp, $vpnCidrs);
+
+/* mTLS (independent flag): prefer explicit header from nginx location / */
+$mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
+$mtlsDetected = in_array($mtlsHeader, ['on','1','true'], true);
+
+/* Whitelist (independent flag) via lease API */
 $defaultLeaseUrl = rtrim(current_host_url(), '/') . '/endpoints/lease_ip.php?list=1';
 $leaseUrl = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_URL') ?: $defaultLeaseUrl));
 
@@ -104,11 +127,42 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
     }
 }
 
-// If no header available, infer mTLS when not LAN, not VPN, not whitelisted.
+/* Conservative inference: only if external + not VPN + not whitelisted and no header */
 $mtlsAssumed = (!$mtlsDetected && !$inLan && !$onVpn && !$isWhitelisted);
 $usingMtls   = $mtlsDetected || $mtlsAssumed;
 
-/* -------------------- theming + render -------------------- */
+/* -------------------- render -------------------- */
+if ($format === 'json') {
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'ok' => true,
+        'user' => $username,
+        'client_ip' => $clientIp,
+        'flags' => [
+            'in_lan'               => $inLan,
+            'on_vpn'               => $onVpn,
+            'using_whitelisted_ip' => $isWhitelisted,
+            'using_mtls'           => $usingMtls,
+        ],
+        'mtls' => [
+            'header'     => $mtlsHeader ?: null,
+            'detected'   => $mtlsDetected,
+            'assumed'    => $mtlsAssumed,
+            'explanation'=> $mtlsDetected ? 'X-MTLS:on' : ($mtlsAssumed ? 'External & not VPN & not whitelisted' : 'Not detected'),
+        ],
+        'lease_api' => [
+            'url' => $leaseUrl,
+            'ok'  => $wlOk,
+            'http'=> $wlHttp,
+            'err' => $wlOk ? null : $wlErr,
+            'match'=> $wlMatch,
+        ],
+        'vpn_cidrs' => $vpnCidrs,
+        'ts' => date('Y-m-d H:i:s T'),
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 render_header('Test Connection');
 ?>
 <style>
@@ -167,9 +221,9 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
 
       <hr class="soft" />
 
-      <!-- Verdicts -->
+      <!-- Independent flags (multiple ✅ can be true) -->
       <div class="kv">
-        <span>Your device is inside the LAN.</span>
+        <span>Your device is inside the LAN (RFC1918).</span>
         <span class="<?php echo $inLan ? 'flag-yes':'flag-no'; ?>"><?php echo $inLan ? '✅' : '❌'; ?></span>
       </div>
       <div class="kv">
@@ -187,13 +241,14 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
 
       <div class="smallprint hint">
         <?php if ($mtlsDetected): ?>
-          mTLS <b>detected</b> via proxy header <code>X-MTLS</code>=<code>on</code>.
+          mTLS <b>detected</b> via header <code>X-MTLS</code>=<code>on</code>.
         <?php elseif ($mtlsAssumed): ?>
-          mTLS <b>assumed</b>: not LAN, not VPN, and not whitelisted.
+          mTLS <b>assumed</b> because the client appears external, not on VPN, and not whitelisted.
         <?php else: ?>
-          mTLS not detected or required for this path.
+          mTLS not detected on this path.
         <?php endif; ?>
-        &nbsp;•&nbsp; Lease source: <code><?php echo h($leaseUrl); ?></code>
+        &nbsp;•&nbsp; VPN CIDR(s): <code><?php echo h(implode(', ', $vpnCidrs) ?: '—'); ?></code>
+        &nbsp;•&nbsp; Lease API: <code><?php echo h($leaseUrl); ?></code>
       </div>
 
       <?php if ($isWhitelisted && $wlMatch): ?>
@@ -218,4 +273,4 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
   </div>
 </div>
 
-<?php render_footer(); ?>
+<?php render_footer();
