@@ -1,5 +1,7 @@
 <?php
-// www/account_manager/show_user.php  (modernized styling, single global policy)
+// www/account_manager/show_user.php  (modernized styling + Authelia MFA integration)
+
+declare(strict_types=1);
 
 set_include_path(".:" . __DIR__ . "/../includes/");
 
@@ -196,6 +198,19 @@ if ($ldap_search) {
     }
   }
 
+  // ---- Authelia MFA status (read-only) ----
+  $AUTHELIA_DIR    = getenv('AUTHELIA_DIR') ?: (realpath(__DIR__ . '/../data/authelia') ?: (__DIR__ . '/../data/authelia'));
+  $AUTHELIA_STATUS = $AUTHELIA_DIR . '/status.json';
+
+  $authelia_status = [];
+  if (is_file($AUTHELIA_STATUS)) {
+    $raw = @file_get_contents($AUTHELIA_STATUS);
+    if ($raw !== false) $authelia_status = json_decode($raw, true) ?: [];
+  }
+  $totp_present   = !empty(($authelia_status['totp'] ?? [])[$account_identifier]);
+  $webauthn_count = (int)(($authelia_status['webauthn'] ?? [])[$account_identifier] ?? 0);
+  $status_ts      = isset($authelia_status['generated_ts']) ? (int)$authelia_status['generated_ts'] : 0;
+
   // Errors (after update attempt)
   if ($too_short) { ?>
     <div class="alert alert-warning"><p class="text-center">Password is too short. Minimum length is <?php echo (int)$min_len; ?> characters.</p></div>
@@ -232,8 +247,6 @@ if ($ldap_search) {
   }
 
 } // end if ($ldap_search)
-
-// ------- JS: length meter + helpers (no zxcvbn) -------
 ?>
 <script type="text/javascript" src="<?php print $SERVER_PATH; ?>js/generate_passphrase.js"></script>
 <script type="text/javascript" src="<?php print $SERVER_PATH; ?>js/wordlist.js"></script>
@@ -300,7 +313,6 @@ document.addEventListener('DOMContentLoaded', updateMeter);
 
 <style type='text/css'>
 /* ---------- modern chrome ---------- */
-.wrap-narrow { max_width: 1100px; margin: 18px auto 32px; } /* keep underscore? using hyphen instead */
 .wrap-narrow { max-width: 1100px; margin: 18px auto 32px; }
 .panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
 .panel-modern .panel-heading {
@@ -315,14 +327,13 @@ document.addEventListener('DOMContentLoaded', updateMeter);
 .btn-soft:hover { background:#17202b; }
 .progress-modern { height:18px; background:#0e151d; border:1px solid rgba(255,255,255,.08); border-radius:10px; }
 .progress-modern .progress-bar { line-height:16px; font-size:12px; }
-/* dual list tweaks to keep your JS selectors working while looking nicer */
 .dual-list .well { background:#0e151d; border:1px solid rgba(255,255,255,.08); border-radius:10px; }
 .dual-list .list-group-item { background:transparent; border-color:rgba(255,255,255,.08); color:#cfe9ff; }
 .dual-list .list-group-item.active { background:#1a2b3a; border-color:#294155; }
 .list-arrows button { margin-bottom: 12px; }
 .panel-title h3 { margin:0; font-size:18px; letter-spacing:.2px; }
 .invisible { visibility:hidden; } .visible { visibility:visible; }
-.right_button { width: 200px; float: right; } /* preserved */
+.right_button { width: 200px; float: right; }
 </style>
 
 <div class="container wrap-narrow">
@@ -330,6 +341,12 @@ document.addEventListener('DOMContentLoaded', updateMeter);
     <div class="panel-heading clearfix">
       <div class="pull-left"><span class="panel-title"><h3><?php print $account_identifier; ?></h3></span></div>
       <div class="pull-right">
+        <?php if ($totp_present) { ?>
+          <button class="btn btn-warning btn-pill" id="btn-reset-totp"
+                  onclick="resetTotp('<?php echo htmlspecialchars($account_identifier, ENT_QUOTES); ?>')">
+            Reset TOTP
+          </button>
+        <?php } ?>
         <button class="btn btn-warning btn-pill" onclick="show_delete_user_button();" <?php if ($account_identifier == $USER_ID) { print "disabled"; }?>>Delete account</button>
         <form action="<?php print "{$THIS_MODULE_PATH}"; ?>/index.php" method="post" style="display:inline;">
           <input type="hidden" name="delete_user" value="<?php print urlencode($account_identifier); ?>">
@@ -411,6 +428,46 @@ document.addEventListener('DOMContentLoaded', updateMeter);
       <div class="help-min text-center" style="margin-top:6px;">
         <sup>&ast;</sup>The account identifier. Changing this will change the full <strong>DN</strong>.
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Authelia MFA Panel ===== -->
+<div class="container wrap-narrow">
+  <div class="panel panel-modern">
+    <div class="panel-heading clearfix">
+      <h3 class="panel-title pull-left" style="padding-top:7.5px;">Authelia MFA</h3>
+      <div class="pull-right">
+        <button class="btn btn-soft btn-pill btn-sm" id="mfa-refresh"
+                onclick="refreshMfa()"
+                title="Re-read status.json (stager refreshes automatically after ops)">Refresh</button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="row" style="margin-bottom:8px;">
+        <div class="col-sm-3"><strong>TOTP</strong></div>
+        <div class="col-sm-6">
+          <span id="totp-badge" class="label <?php echo $totp_present ? 'label-success' : 'label-default'; ?>">
+            <?php echo $totp_present ? 'Yes' : 'No'; ?>
+          </span>
+        </div>
+        <div class="col-sm-3 text-right help-min">
+          <span id="mfa-age"><?php
+            echo $status_ts ? ('Updated ' . date('Y-m-d H:i:s', $status_ts)) : 'No status yet';
+          ?></span>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:6px;">
+        <div class="col-sm-3"><strong>WebAuthn</strong></div>
+        <div class="col-sm-6">
+          <span id="webauthn-badge" class="label <?php echo ($webauthn_count>0) ? 'label-info' : 'label-default'; ?>">
+            <?php echo (int)$webauthn_count; ?> device<?php echo ($webauthn_count==1)?'':'s'; ?>
+          </span>
+        </div>
+      </div>
+
+      <div id="mfa-toast" class="help-min" style="margin-top:10px; display:none;"></div>
     </div>
   </div>
 </div>
@@ -549,6 +606,108 @@ function update_form_with_groups(){
       }).hide();
   });
 })();
+</script>
+
+<!-- ===== Authelia integration JS ===== -->
+<script type="text/javascript">
+function showToast(msg, isErr){
+  var t = document.getElementById('mfa-toast');
+  if (!t) return;
+  t.style.display = 'block';
+  t.style.color = isErr ? '#ffb3b3' : '#9fd1a5';
+  t.textContent = msg;
+  setTimeout(function(){ t.style.display='none'; }, 7000);
+}
+
+async function refreshMfa(){
+  try{
+    const res = await fetch('authelia_api.php?action=status&t=' + Date.now(), { credentials:'include' });
+    if(!res.ok){ showToast('Failed to refresh status ('+res.status+')', true); return; }
+    const j = await res.json();
+    const uid = <?php echo json_encode($account_identifier); ?>;
+    const totp = !!(j.totp && j.totp[uid]);
+    const webn = (j.webauthn && j.webauthn[uid])|0;
+
+    var tb = document.getElementById('totp-badge');
+    if (tb){ tb.textContent = totp ? 'Yes' : 'No';
+             tb.className   = 'label ' + (totp ? 'label-success' : 'label-default'); }
+
+    var wb = document.getElementById('webauthn-badge');
+    if (wb){ wb.textContent = webn + ' device' + (webn===1?'':'s');
+             wb.className   = 'label ' + (webn>0 ? 'label-info' : 'label-default'); }
+
+    var age = document.getElementById('mfa-age');
+    if (age && j.generated_ts) {
+      var d = new Date(j.generated_ts * 1000);
+      var pad = n => (n<10?'0':'')+n;
+      age.textContent = 'Updated ' + d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+                        ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    // Toggle header Reset TOTP button presence
+    var hdrBtn = document.getElementById('btn-reset-totp');
+    if (hdrBtn){
+      if (!totp) hdrBtn.remove();
+    } else {
+      if (totp){
+        // Optional: could insert the button dynamically if you want it to appear when TOTP re-appears
+      }
+    }
+  }catch(e){
+    showToast('Refresh failed: ' + e, true);
+  }
+}
+
+async function resetTotp(user){
+  const hdrBtn = document.getElementById('btn-reset-totp');
+  if (hdrBtn){ hdrBtn.disabled = true; hdrBtn.textContent = 'Resetting…'; }
+
+  try{
+    const body = new URLSearchParams({ op:'totp.delete', user:user });
+    const res  = await fetch('authelia_api.php', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+      credentials:'include',
+      body
+    });
+    const j = await res.json();
+    if (!j.ok){ showToast('Queue failed: ' + (j.error || 'unknown'), true);
+                if(hdrBtn){hdrBtn.disabled=false;hdrBtn.textContent='Reset TOTP';}
+                return; }
+
+    const id = j.action_id;
+    let tries = 0;
+
+    const poll = async () => {
+      tries++;
+      const r = await fetch('authelia_api.php?action=result&id=' + encodeURIComponent(id) + '&t=' + Date.now(),
+                            { credentials:'include' });
+      if (r.status === 404) {
+        if (tries < 40) { setTimeout(poll, 750); }
+        else { showToast('Timed out waiting for result', true);
+               if(hdrBtn){hdrBtn.disabled=false;hdrBtn.textContent='Reset TOTP';} }
+        return;
+      }
+      const jr = await r.json();
+      if (!jr.ok) {
+        showToast(jr.details || 'Delete failed', true);
+        if(hdrBtn){hdrBtn.disabled=false;hdrBtn.textContent='Reset TOTP';}
+        return;
+      }
+      showToast(jr.details || 'TOTP deleted');
+      // Update UI immediately
+      var tb = document.getElementById('totp-badge');
+      if (tb){ tb.textContent = 'No'; tb.className = 'label label-default'; }
+      if (hdrBtn) hdrBtn.remove();
+      // stager nudges a status refresh; fetch it to update the age/webauthn if needed
+      setTimeout(refreshMfa, 600);
+    };
+    poll();
+  }catch(e){
+    showToast('Error: ' + e, true);
+    if(hdrBtn){hdrBtn.disabled=false;hdrBtn.textContent='Reset TOTP';}
+  }
+}
 </script>
 
 <?php render_footer(); ?>
