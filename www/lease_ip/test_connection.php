@@ -108,7 +108,7 @@ $usingMtls    = in_array($mtlsHeader, ['on','1','true'], true);
 /* --- Lease API base: prefer env/lease_url; else default to APEX of current host (keep scheme) --- */
 $hostNow = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
 $labels  = explode('.', $hostNow);
-$apex    = (count($labels) >= 3) ? implode('.', array_slice($labels, -3)) : $hostNow; // users.app.gg.no.re -> gg.no.re
+$apex    = (count($labels) >= 3) ? implode('.', array_slice($labels, -3)) : $hostNow; // users.mydomain.com -> mydomain.com
 $scheme  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443') ? 'https' : 'http';
 $defaultApexBase = $scheme . '://' . $apex . '/endpoints/lease_ip.php';
 
