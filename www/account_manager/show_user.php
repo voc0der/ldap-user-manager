@@ -1,5 +1,5 @@
 <?php
-// www/account_manager/show_user.php  (modernized styling + Authelia MFA integration)
+// www/account_manager/show_user.php  (modernized styling + Authelia MFA inline resets)
 
 declare(strict_types=1);
 
@@ -114,7 +114,6 @@ if ($ldap_search) {
   }
 
   // ---- Determine policy for this target account (global min only) ----
-  // Still fetch groups for the membership UI, but password policy is global.
   $target_groups = ldap_user_group_membership($ldap_connection, $account_identifier);
   $min_len = DEFAULT_MIN_LEN;
 
@@ -210,6 +209,9 @@ if ($ldap_search) {
   $totp_present   = !empty(($authelia_status['totp'] ?? [])[$account_identifier]);
   $webauthn_count = (int)(($authelia_status['webauthn'] ?? [])[$account_identifier] ?? 0);
   $status_ts      = isset($authelia_status['generated_ts']) ? (int)$authelia_status['generated_ts'] : 0;
+
+  // ---- Block actions for protected user ----
+  $MFA_BLOCKED_FOR_USER = (strcasecmp($account_identifier, 'vocoder') === 0);
 
   // Errors (after update attempt)
   if ($too_short) { ?>
@@ -325,6 +327,10 @@ document.addEventListener('DOMContentLoaded', updateMeter);
 .btn-pill { border-radius:999px; }
 .btn-soft { background:#121820; border:1px solid rgba(255,255,255,.12); color:#cfe9ff; }
 .btn-soft:hover { background:#17202b; }
+.btn-ghost { background:transparent; border:1px solid rgba(255,255,255,.14); color:#b9d7f3; }
+.btn-ghost:hover { background:rgba(255,255,255,.06); }
+.btn-xxs { padding:3px 8px; font-size:11px; line-height:1.2; border-radius:10px; vertical-align:middle; margin-left:8px; }
+.label { vertical-align:middle; }
 .progress-modern { height:18px; background:#0e151d; border:1px solid rgba(255,255,255,.08); border-radius:10px; }
 .progress-modern .progress-bar { line-height:16px; font-size:12px; }
 .dual-list .well { background:#0e151d; border:1px solid rgba(255,255,255,.08); border-radius:10px; }
@@ -341,12 +347,6 @@ document.addEventListener('DOMContentLoaded', updateMeter);
     <div class="panel-heading clearfix">
       <div class="pull-left"><span class="panel-title"><h3><?php print $account_identifier; ?></h3></span></div>
       <div class="pull-right">
-        <?php if ($totp_present) { ?>
-          <button class="btn btn-warning btn-pill" id="btn-reset-totp"
-                  onclick="resetTotp('<?php echo htmlspecialchars($account_identifier, ENT_QUOTES); ?>')">
-            Reset TOTP
-          </button>
-        <?php } ?>
         <button class="btn btn-warning btn-pill" onclick="show_delete_user_button();" <?php if ($account_identifier == $USER_ID) { print "disabled"; }?>>Delete account</button>
         <form action="<?php print "{$THIS_MODULE_PATH}"; ?>/index.php" method="post" style="display:inline;">
           <input type="hidden" name="delete_user" value="<?php print urlencode($account_identifier); ?>">
@@ -432,7 +432,7 @@ document.addEventListener('DOMContentLoaded', updateMeter);
   </div>
 </div>
 
-<!-- ===== Authelia MFA Panel ===== -->
+<!-- ===== Authelia MFA Panel (inline reset buttons) ===== -->
 <div class="container wrap-narrow">
   <div class="panel panel-modern">
     <div class="panel-heading clearfix">
@@ -444,12 +444,24 @@ document.addEventListener('DOMContentLoaded', updateMeter);
       </div>
     </div>
     <div class="panel-body">
+      <?php if ($MFA_BLOCKED_FOR_USER) { ?>
+        <div class="alert alert-warning" style="margin-bottom:14px;">
+          MFA actions are disabled for this account.
+        </div>
+      <?php } ?>
       <div class="row" style="margin-bottom:8px;">
         <div class="col-sm-3"><strong>TOTP</strong></div>
         <div class="col-sm-6">
           <span id="totp-badge" class="label <?php echo $totp_present ? 'label-success' : 'label-default'; ?>">
             <?php echo $totp_present ? 'Yes' : 'No'; ?>
           </span>
+          <?php if ($totp_present && !$MFA_BLOCKED_FOR_USER) { ?>
+            <button id="btn-reset-totp" class="btn btn-ghost btn-xxs"
+                    onclick="resetTotp('<?php echo htmlspecialchars($account_identifier, ENT_QUOTES); ?>')"
+                    title="Delete TOTP secret for this user">
+              Reset
+            </button>
+          <?php } ?>
         </div>
         <div class="col-sm-3 text-right help-min">
           <span id="mfa-age"><?php
@@ -464,6 +476,13 @@ document.addEventListener('DOMContentLoaded', updateMeter);
           <span id="webauthn-badge" class="label <?php echo ($webauthn_count>0) ? 'label-info' : 'label-default'; ?>">
             <?php echo (int)$webauthn_count; ?> device<?php echo ($webauthn_count==1)?'':'s'; ?>
           </span>
+          <?php if ($webauthn_count > 0 && !$MFA_BLOCKED_FOR_USER) { ?>
+            <button id="btn-reset-wa" class="btn btn-ghost btn-xxs"
+                    onclick="resetWebAuthnAll('<?php echo htmlspecialchars($account_identifier, ENT_QUOTES); ?>')"
+                    title="Delete all WebAuthn devices for this user">
+              Reset
+            </button>
+          <?php } ?>
         </div>
       </div>
 
@@ -610,6 +629,9 @@ function update_form_with_groups(){
 
 <!-- ===== Authelia integration JS ===== -->
 <script type="text/javascript">
+var MFA_BLOCKED = <?php echo $MFA_BLOCKED_FOR_USER ? 'true' : 'false'; ?>;
+var TARGET_UID  = <?php echo json_encode($account_identifier); ?>;
+
 function showToast(msg, isErr){
   var t = document.getElementById('mfa-toast');
   if (!t) return;
@@ -624,7 +646,7 @@ async function refreshMfa(){
     const res = await fetch('authelia_api.php?action=status&t=' + Date.now(), { credentials:'include' });
     if(!res.ok){ showToast('Failed to refresh status ('+res.status+')', true); return; }
     const j = await res.json();
-    const uid = <?php echo json_encode($account_identifier); ?>;
+    const uid = TARGET_UID;
     const totp = !!(j.totp && j.totp[uid]);
     const webn = (j.webauthn && j.webauthn[uid])|0;
 
@@ -636,6 +658,25 @@ async function refreshMfa(){
     if (wb){ wb.textContent = webn + ' device' + (webn===1?'':'s');
              wb.className   = 'label ' + (webn>0 ? 'label-info' : 'label-default'); }
 
+    // Toggle inline buttons depending on state + block
+    var btnT = document.getElementById('btn-reset-totp');
+    if (btnT){
+      if (!totp || MFA_BLOCKED) btnT.remove();
+    } else {
+      if (totp && !MFA_BLOCKED){
+        // could re-insert dynamically if you want; omitted for simplicity
+      }
+    }
+
+    var btnW = document.getElementById('btn-reset-wa');
+    if (btnW){
+      if (webn<=0 || MFA_BLOCKED) btnW.remove();
+    } else {
+      if (webn>0 && !MFA_BLOCKED){
+        // could re-insert dynamically if you want; omitted for simplicity
+      }
+    }
+
     var age = document.getElementById('mfa-age');
     if (age && j.generated_ts) {
       var d = new Date(j.generated_ts * 1000);
@@ -643,24 +684,15 @@ async function refreshMfa(){
       age.textContent = 'Updated ' + d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
                         ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
-
-    // Toggle header Reset TOTP button presence
-    var hdrBtn = document.getElementById('btn-reset-totp');
-    if (hdrBtn){
-      if (!totp) hdrBtn.remove();
-    } else {
-      if (totp){
-        // Optional: could insert the button dynamically if you want it to appear when TOTP re-appears
-      }
-    }
   }catch(e){
     showToast('Refresh failed: ' + e, true);
   }
 }
 
 async function resetTotp(user){
-  const hdrBtn = document.getElementById('btn-reset-totp');
-  if (hdrBtn){ hdrBtn.disabled = true; hdrBtn.textContent = 'Resetting…'; }
+  if (MFA_BLOCKED) { showToast('MFA actions are disabled for this account.', true); return; }
+  const btn = document.getElementById('btn-reset-totp');
+  if (btn){ btn.disabled = true; btn.textContent = 'Resetting…'; }
 
   try{
     const body = new URLSearchParams({ op:'totp.delete', user:user });
@@ -672,7 +704,7 @@ async function resetTotp(user){
     });
     const j = await res.json();
     if (!j.ok){ showToast('Queue failed: ' + (j.error || 'unknown'), true);
-                if(hdrBtn){hdrBtn.disabled=false;hdrBtn.textContent='Reset TOTP';}
+                if(btn){btn.disabled=false;btn.textContent='Reset';}
                 return; }
 
     const id = j.action_id;
@@ -685,27 +717,75 @@ async function resetTotp(user){
       if (r.status === 404) {
         if (tries < 40) { setTimeout(poll, 750); }
         else { showToast('Timed out waiting for result', true);
-               if(hdrBtn){hdrBtn.disabled=false;hdrBtn.textContent='Reset TOTP';} }
+               if(btn){btn.disabled=false;btn.textContent='Reset';} }
         return;
       }
       const jr = await r.json();
       if (!jr.ok) {
         showToast(jr.details || 'Delete failed', true);
-        if(hdrBtn){hdrBtn.disabled=false;hdrBtn.textContent='Reset TOTP';}
+        if(btn){btn.disabled=false;btn.textContent='Reset';}
         return;
       }
       showToast(jr.details || 'TOTP deleted');
-      // Update UI immediately
       var tb = document.getElementById('totp-badge');
       if (tb){ tb.textContent = 'No'; tb.className = 'label label-default'; }
-      if (hdrBtn) hdrBtn.remove();
-      // stager nudges a status refresh; fetch it to update the age/webauthn if needed
+      if (btn) btn.remove();
       setTimeout(refreshMfa, 600);
     };
     poll();
   }catch(e){
     showToast('Error: ' + e, true);
-    if(hdrBtn){hdrBtn.disabled=false;hdrBtn.textContent='Reset TOTP';}
+    if(btn){btn.disabled=false;btn.textContent='Reset';}
+  }
+}
+
+async function resetWebAuthnAll(user){
+  if (MFA_BLOCKED) { showToast('MFA actions are disabled for this account.', true); return; }
+  const btn = document.getElementById('btn-reset-wa');
+  if (btn){ btn.disabled = true; btn.textContent = 'Resetting…'; }
+
+  try{
+    const body = new URLSearchParams({ op:'webauthn.delete', user:user, scope:'all' });
+    const res  = await fetch('authelia_api.php', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+      credentials:'include',
+      body
+    });
+    const j = await res.json();
+    if (!j.ok){ showToast('Queue failed: ' + (j.error || 'unknown'), true);
+                if(btn){btn.disabled=false;btn.textContent='Reset';}
+                return; }
+
+    const id = j.action_id;
+    let tries = 0;
+
+    const poll = async () => {
+      tries++;
+      const r = await fetch('authelia_api.php?action=result&id=' + encodeURIComponent(id) + '&t=' + Date.now(),
+                            { credentials:'include' });
+      if (r.status === 404) {
+        if (tries < 40) { setTimeout(poll, 750); }
+        else { showToast('Timed out waiting for result', true);
+               if(btn){btn.disabled=false;btn.textContent='Reset';} }
+        return;
+      }
+      const jr = await r.json();
+      if (!jr.ok) {
+        showToast(jr.details || 'Delete failed', true);
+        if(btn){btn.disabled=false;btn.textContent='Reset';}
+        return;
+      }
+      showToast(jr.details || 'WebAuthn devices deleted');
+      var wb = document.getElementById('webauthn-badge');
+      if (wb){ wb.textContent = '0 devices'; wb.className = 'label label-default'; }
+      if (btn) btn.remove();
+      setTimeout(refreshMfa, 600);
+    };
+    poll();
+  }catch(e){
+    showToast('Error: ' + e, true);
+    if(btn){btn.disabled=false;btn.textContent='Reset';}
   }
 }
 </script>
