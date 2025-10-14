@@ -78,7 +78,6 @@ function fetch_json(string $url): array {
     return [true, $data, $code, ''];
 }
 function http_touch(string $url): array {
-    // lightweight GET (not JSON-specific)
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -86,7 +85,6 @@ function http_touch(string $url): array {
         CURLOPT_CONNECTTIMEOUT => 2,
         CURLOPT_TIMEOUT        => 3,
         CURLOPT_USERAGENT      => 'LUM-ConnTest/1.2',
-        // keep it simple; body ignored
     ]);
     curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
@@ -123,10 +121,23 @@ $onVpn    = $isV4 && !empty($vpnCidrs) && ip_in_any_cidr($clientIp, $vpnCidrs);
 $mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
 $usingMtls    = in_array($mtlsHeader, ['on','1','true'], true);
 
-/* Whitelist (independent flag) via lease API built from LEASE_API_BASE */
-$base     = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_BASE') ?: (rtrim(current_host_url(), '/') . '/endpoints/lease_ip.php')));
-$leaseUrl = (function($u){$q=parse_url($u,PHP_URL_QUERY);return ($q && preg_match('/(?:^|&)list=1(?:&|$)/',(string)$q))?$u:$u.(strpos($u,'?')!==false?'&':'?').'list=1';})($base);
+/* --- Lease API base: prefer env/lease_url; else default to APEX of current host (scheme kept) --- */
+$hostNow = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+$labels  = explode('.', $hostNow);
+$apex    = (count($labels) >= 3) ? implode('.', array_slice($labels, -3)) : $hostNow; // users.app.gg.no.re -> gg.no.re
+$scheme  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443') ? 'https' : 'http';
 
+$defaultApexBase = $scheme . '://' . $apex . '/endpoints/lease_ip.php';
+
+$base     = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_BASE') ?: $defaultApexBase));
+$leaseUrl = (function($u){
+    $q = parse_url($u, PHP_URL_QUERY);
+    return ($q && preg_match('/(?:^|&)list=1(?:&|$)/', (string)$q))
+        ? $u
+        : $u . (strpos($u,'?')!==false ? '&' : '?') . 'list=1';
+})($base);
+
+/* Resolve current lease status (whitelist) */
 $isWhitelisted = false;
 $wlMatch = null;
 list($wlOk, $wlPayload, $wlHttp, $wlErr) = fetch_json($leaseUrl);
@@ -146,20 +157,21 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
     }
 }
 
-/* ---- Inline Lease action ---- */
+/* ---- Inline Lease action (for iframe) ---- */
 $allNo = (!$inLan && !$onVpn && !$usingMtls && !$isWhitelisted);
-$leaseActionBase = $base; // same endpoint, without forcing list=1
+$sourceTag = 'LUM Iframe';
+$leaseActionBase = $base; // do not force list=1 for write
 $leaseActionUrl  = $leaseActionBase
                  . (strpos($leaseActionBase, '?') !== false ? '&' : '?')
                  . 'add=1'
                  . '&ip='     . rawurlencode($clientIp)
-                 . '&source=' . rawurlencode('lum-conn-test-iframe')
+                 . '&source=' . rawurlencode($sourceTag)
                  . '&label='  . rawurlencode($username);
 
-/* ---- Same-origin proxy to avoid third-party cookie/CORS issues ---- */
+/* ---- Same-origin proxy to avoid cross-origin issues; preserves lease_url target ---- */
 if (isset($_GET['do']) && $_GET['do'] === 'lease') {
-    // Always append a cache-buster; respond JSON and exit.
-    [$ok, $code, $err] = http_touch($leaseActionUrl . ((strpos($leaseActionUrl,'?')!==false)?'&':'?') . 'px=' . time());
+    $target = $leaseActionUrl . ((strpos($leaseActionUrl,'?')!==false) ? '&' : '?') . 'px=' . time();
+    [$ok, $code, $err] = http_touch($target);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['ok'=>$ok, 'http'=>$code, 'err'=>$ok?null:$err], JSON_UNESCAPED_SLASHES);
     exit;
@@ -196,7 +208,9 @@ if ($format === 'json') {
 }
 elseif ($format === 'iframe') {
     header('Content-Type: text/html; charset=utf-8');
-    $selfLeaseUrl = $_SERVER['PHP_SELF'] . '?format=iframe&do=lease';
+    $selfLeaseUrl = $_SERVER['PHP_SELF']
+                  . '?format=iframe&do=lease&lease_url='
+                  . rawurlencode($base);
     ?>
     <!doctype html>
     <html>
@@ -216,11 +230,7 @@ elseif ($format === 'iframe') {
         .label{font-weight:600; letter-spacing:.2px}
         .yes{font-weight:700}
         .no{font-weight:700}
-
-        /* inline value container: button + icon */
         .val{display:inline-flex; align-items:center; gap:8px;}
-
-        /* high-contrast button for both themes */
         .btn{display:inline-block; text-decoration:none; line-height:1; padding:8px 12px; border-radius:9px; font-weight:700; cursor:pointer; user-select:none; -webkit-tap-highlight-color:transparent;}
         @media (prefers-color-scheme: dark){
           .btn{ background:rgba(127,209,255,.18); color:#d6f1ff; border:1px solid rgba(127,209,255,.55); }
@@ -244,8 +254,6 @@ elseif ($format === 'iframe') {
         <div class="row"><span class="label">mTLS</span>
           <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
         </div>
-
-        <!-- Leased IP row: button on the left, icon on the right -->
         <div class="row">
           <span class="label">Leased IP</span>
           <span class="val">
@@ -267,11 +275,8 @@ elseif ($format === 'iframe') {
             ev.preventDefault();
             btn.setAttribute('aria-busy', 'true');
             btn.textContent = 'Leasing…';
-
             var finish = function(){ setTimeout(function(){ location.reload(); }, 700); };
-
             try {
-              // Same-origin proxy call (no CORS/third-party cookie issues)
               fetch(url + (url.indexOf('?')>-1 ? '&':'?') + 't=' + Date.now(), { credentials:'include' })
                 .then(function(){ /* ignore body */ })
                 .catch(function(){ /* ignore */ })
