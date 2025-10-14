@@ -77,6 +77,23 @@ function fetch_json(string $url): array {
     if (!is_array($data)) return [false, null, $code, 'invalid_json'];
     return [true, $data, $code, ''];
 }
+function http_touch(string $url): array {
+    // lightweight GET (not JSON-specific)
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT        => 3,
+        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.2',
+        // keep it simple; body ignored
+    ]);
+    curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
+    $err  = curl_error($ch);
+    curl_close($ch);
+    return [$code >= 200 && $code < 400, $code, $err];
+}
 function current_host_url(): string {
     $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443');
@@ -129,7 +146,7 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
     }
 }
 
-/* ---- Inline Lease action (for iframe) ---- */
+/* ---- Inline Lease action ---- */
 $allNo = (!$inLan && !$onVpn && !$usingMtls && !$isWhitelisted);
 $leaseActionBase = $base; // same endpoint, without forcing list=1
 $leaseActionUrl  = $leaseActionBase
@@ -138,6 +155,15 @@ $leaseActionUrl  = $leaseActionBase
                  . '&ip='     . rawurlencode($clientIp)
                  . '&source=' . rawurlencode('lum-conn-test-iframe')
                  . '&label='  . rawurlencode($username);
+
+/* ---- Same-origin proxy to avoid third-party cookie/CORS issues ---- */
+if (isset($_GET['do']) && $_GET['do'] === 'lease') {
+    // Always append a cache-buster; respond JSON and exit.
+    [$ok, $code, $err] = http_touch($leaseActionUrl . ((strpos($leaseActionUrl,'?')!==false)?'&':'?') . 'px=' . time());
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['ok'=>$ok, 'http'=>$code, 'err'=>$ok?null:$err], JSON_UNESCAPED_SLASHES);
+    exit;
+}
 
 /* -------------------- render -------------------- */
 if ($format === 'json') {
@@ -170,6 +196,7 @@ if ($format === 'json') {
 }
 elseif ($format === 'iframe') {
     header('Content-Type: text/html; charset=utf-8');
+    $selfLeaseUrl = $_SERVER['PHP_SELF'] . '?format=iframe&do=lease';
     ?>
     <!doctype html>
     <html>
@@ -190,18 +217,18 @@ elseif ($format === 'iframe') {
         .yes{font-weight:700}
         .no{font-weight:700}
 
-        /* inline value container so we can position button and icon cleanly */
+        /* inline value container: button + icon */
         .val{display:inline-flex; align-items:center; gap:8px;}
 
         /* high-contrast button for both themes */
-        .btn{display:inline-block; text-decoration:none; line-height:1; padding:8px 12px; border-radius:9px; font-weight:600; cursor:pointer; user-select:none; -webkit-tap-highlight-color:transparent;}
+        .btn{display:inline-block; text-decoration:none; line-height:1; padding:8px 12px; border-radius:9px; font-weight:700; cursor:pointer; user-select:none; -webkit-tap-highlight-color:transparent;}
         @media (prefers-color-scheme: dark){
-          .btn{ background:rgba(127,209,255,.14); color:#a9e1ff; border:1px solid rgba(127,209,255,.45); }
-          .btn:hover,.btn:active{ background:rgba(127,209,255,.22); }
+          .btn{ background:rgba(127,209,255,.18); color:#d6f1ff; border:1px solid rgba(127,209,255,.55); }
+          .btn:hover,.btn:active{ background:rgba(127,209,255,.26); }
         }
         @media (prefers-color-scheme: light){
-          .btn{ background:rgba(0,123,255,.10); color:#0b63c7; border:1px solid rgba(0,123,255,.40); }
-          .btn:hover,.btn:active{ background:rgba(0,123,255,.16); }
+          .btn{ background:rgba(0,123,255,.14); color:#0b63c7; border:1px solid rgba(0,123,255,.50); }
+          .btn:hover,.btn:active{ background:rgba(0,123,255,.22); }
         }
         .btn[aria-busy="true"]{opacity:.7; pointer-events:none}
       </style>
@@ -218,12 +245,12 @@ elseif ($format === 'iframe') {
           <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
         </div>
 
-        <!-- Leased IP row: button on the other side of the X (button first, then icon) -->
+        <!-- Leased IP row: button on the left, icon on the right -->
         <div class="row">
           <span class="label">Leased IP</span>
           <span class="val">
             <?php if ($allNo && $isV4): ?>
-              <a id="leaseBtn" class="btn" href="<?php echo h($leaseActionUrl); ?>" role="button" aria-label="Lease this IP">Lease this IP</a>
+              <a id="leaseBtn" class="btn" href="<?php echo h($selfLeaseUrl); ?>" role="button" aria-label="Lease this IP">Lease this IP</a>
             <?php endif; ?>
             <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
           </span>
@@ -241,19 +268,14 @@ elseif ($format === 'iframe') {
             btn.setAttribute('aria-busy', 'true');
             btn.textContent = 'Leasing…';
 
-            var finish = function(){ setTimeout(function(){ location.reload(); }, 900); };
+            var finish = function(){ setTimeout(function(){ location.reload(); }, 700); };
 
             try {
-              if (window.fetch) {
-                // Fire-and-forget GET; response ignored (no-cors)
-                fetch(url + (url.indexOf('?')>-1 ? '&':'?') + 'px=' + Date.now(), { mode:'no-cors', credentials:'include' })
-                  .catch(function(){ /* ignore */ })
-                  .finally(finish);
-              } else {
-                var img = new Image();
-                img.onload = img.onerror = finish;
-                img.src = url + (url.indexOf('?')>-1 ? '&':'?') + 'px=' + Date.now();
-              }
+              // Same-origin proxy call (no CORS/third-party cookie issues)
+              fetch(url + (url.indexOf('?')>-1 ? '&':'?') + 't=' + Date.now(), { credentials:'include' })
+                .then(function(){ /* ignore body */ })
+                .catch(function(){ /* ignore */ })
+                .finally(finish);
             } catch (_){
               finish();
             }
