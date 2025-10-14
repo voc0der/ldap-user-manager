@@ -20,9 +20,7 @@ function canon_ip(?string $ip): ?string {
 }
 function get_client_ip(): ?string {
     $candidates = [];
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $p) $candidates[] = trim($p);
-    }
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $p) $candidates[] = trim($p);
     if (!empty($_SERVER['HTTP_X_REAL_IP'])) $candidates[] = trim($_SERVER['HTTP_X_REAL_IP']);
     if (!empty($_SERVER['REMOTE_ADDR']))    $candidates[] = trim($_SERVER['REMOTE_ADDR']);
     foreach ($candidates as $v) if ($v = canon_ip($v)) return $v;
@@ -35,7 +33,7 @@ function ip_in_cidr(string $ip, string $cidr): bool {
     $ipBin  = @inet_pton($ip);
     $subBin = @inet_pton($sub);
     if ($ipBin === false || $subBin === false) return false;
-    if (strlen($ipBin) !== strlen($subBin)) return false; // v4 vs v6 mismatch
+    if (strlen($ipBin) !== strlen($subBin)) return false;
     $bytes = intdiv($bits, 8);
     $rem   = $bits % 8;
     if ($bytes && substr($ipBin, 0, $bytes) !== substr($subBin, 0, $bytes)) return false;
@@ -58,7 +56,76 @@ function parse_cidr_list(string $spec): array {
     $parts = preg_split('/[,\s;]+/', $spec, -1, PREG_SPLIT_NO_EMPTY);
     return array_values(array_unique(array_map('trim', $parts)));
 }
-function fetch_json(string $url): array {
+function http_request(string $url, string $method='GET', ?string $body=null, array $headers=[]): array {
+    $ch = curl_init($url);
+    $opts = [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_TIMEOUT        => 4,
+        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.2',
+        CURLOPT_HEADER         => false,
+    ];
+    if ($method !== 'GET') {
+        $opts[CURLOPT_CUSTOMREQUEST] = $method;
+        if ($body !== null) $opts[CURLOPT_POSTFIELDS] = $body;
+    }
+    if ($headers) $opts[CURLOPT_HTTPHEADER] = $headers;
+    curl_setopt_array($ch, $opts);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
+    $err  = curl_error($ch);
+    curl_close($ch);
+    return [$code >= 200 && $code < 300, $code, $err, (string)$resp];
+}
+function current_host_url(): string {
+    $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443');
+    return ($https ? 'https://' : 'http://') . $host;
+}
+
+/* -------------------- inputs + detection -------------------- */
+$format = strtolower((string)($_GET['format'] ?? 'html'));
+if (!in_array($format, ['html','json','iframe'], true)) $format = 'html';
+$showMenu = !in_array(strtolower((string)($_GET['render_menu'] ?? '1')), ['0','no','false'], true);
+
+$clientIp = get_client_ip() ?: '0.0.0.0';
+$isV4     = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
+
+/* LAN = any RFC1918 IPv4 + localhost */
+$lanCidrs = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
+$inLan    = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
+
+/* VPN CIDR(s) */
+$vpnSpec  = getenv('VPN_CIDR') ?: '10.2.4.0/24';
+$vpnCidrs = parse_cidr_list($vpnSpec);
+$onVpn    = $isV4 && !empty($vpnCidrs) && ip_in_any_cidr($clientIp, $vpnCidrs);
+
+/* mTLS header */
+$mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
+$usingMtls    = in_array($mtlsHeader, ['on','1','true'], true);
+
+/* --- Lease API base: prefer env/lease_url; else default to APEX of current host (keep scheme) --- */
+$hostNow = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
+$labels  = explode('.', $hostNow);
+$apex    = (count($labels) >= 3) ? implode('.', array_slice($labels, -3)) : $hostNow; // users.app.gg.no.re -> gg.no.re
+$scheme  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443') ? 'https' : 'http';
+$defaultApexBase = $scheme . '://' . $apex . '/endpoints/lease_ip.php';
+
+$base = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_BASE') ?: $defaultApexBase));
+
+/* Build list URL: MUST be exactly one op (?list=1) */
+$leaseUrl = (function($u){
+    $q = parse_url($u, PHP_URL_QUERY);
+    return ($q && preg_match('/(?:^|&)list=1(?:&|$)/', (string)$q))
+        ? $u
+        : $u . (strpos($u,'?')!==false ? '&' : '?') . 'list=1';
+})($base);
+
+/* -------- Resolve whitelist (list) -------- */
+$isWhitelisted = false;
+$wlMatch = null;
+list($wlOk, $wlPayload, $wlHttp, $wlErr) = (function($url){
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -76,71 +143,8 @@ function fetch_json(string $url): array {
     $data = json_decode($body, true);
     if (!is_array($data)) return [false, null, $code, 'invalid_json'];
     return [true, $data, $code, ''];
-}
-function http_touch(string $url): array {
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_CONNECTTIMEOUT => 2,
-        CURLOPT_TIMEOUT        => 3,
-        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.2',
-    ]);
-    curl_exec($ch);
-    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
-    $err  = curl_error($ch);
-    curl_close($ch);
-    return [$code >= 200 && $code < 400, $code, $err];
-}
-function current_host_url(): string {
-    $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
-    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443');
-    return ($https ? 'https://' : 'http://') . $host;
-}
+})($leaseUrl);
 
-/* -------------------- inputs + detection -------------------- */
-$format = strtolower((string)($_GET['format'] ?? 'html'));
-if (!in_array($format, ['html','json','iframe'], true)) {
-    $format = 'html';
-}
-$showMenu = !in_array(strtolower((string)($_GET['render_menu'] ?? '1')), ['0','no','false'], true);
-
-$clientIp = get_client_ip() ?: '0.0.0.0';
-$isV4     = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
-
-/* LAN = any RFC1918 IPv4 + localhost (independent flag) */
-$lanCidrs = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
-$inLan    = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
-
-/* VPN CIDR(s) from env (independent flag). Default to 10.2.4.0/24. */
-$vpnSpec  = getenv('VPN_CIDR') ?: '10.2.4.0/24';
-$vpnCidrs = parse_cidr_list($vpnSpec);
-$onVpn    = $isV4 && !empty($vpnCidrs) && ip_in_any_cidr($clientIp, $vpnCidrs);
-
-/* mTLS (independent flag): explicit header only */
-$mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
-$usingMtls    = in_array($mtlsHeader, ['on','1','true'], true);
-
-/* --- Lease API base: prefer env/lease_url; else default to APEX of current host (scheme kept) --- */
-$hostNow = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
-$labels  = explode('.', $hostNow);
-$apex    = (count($labels) >= 3) ? implode('.', array_slice($labels, -3)) : $hostNow; // users.app.gg.no.re -> gg.no.re
-$scheme  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443') ? 'https' : 'http';
-
-$defaultApexBase = $scheme . '://' . $apex . '/endpoints/lease_ip.php';
-
-$base     = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_BASE') ?: $defaultApexBase));
-$leaseUrl = (function($u){
-    $q = parse_url($u, PHP_URL_QUERY);
-    return ($q && preg_match('/(?:^|&)list=1(?:&|$)/', (string)$q))
-        ? $u
-        : $u . (strpos($u,'?')!==false ? '&' : '?') . 'list=1';
-})($base);
-
-/* Resolve current lease status (whitelist) */
-$isWhitelisted = false;
-$wlMatch = null;
-list($wlOk, $wlPayload, $wlHttp, $wlErr) = fetch_json($leaseUrl);
 if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
     foreach ($wlPayload['entries'] as $e) {
         if (!isset($e['ip'])) continue;
@@ -158,22 +162,34 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
 }
 
 /* ---- Inline Lease action (for iframe) ---- */
-$allNo = (!$inLan && !$onVpn && !$usingMtls && !$isWhitelisted);
+$allNo     = (!$inLan && !$onVpn && !$usingMtls && !$isWhitelisted);
 $sourceTag = 'LUM Iframe';
-$leaseActionBase = $base; // do not force list=1 for write
-$leaseActionUrl  = $leaseActionBase
-                 . (strpos($leaseActionBase, '?') !== false ? '&' : '?')
-                 . 'add=1'
-                 . '&ip='     . rawurlencode($clientIp)
-                 . '&source=' . rawurlencode($sourceTag)
-                 . '&label='  . rawurlencode($username);
 
-/* ---- Same-origin proxy to avoid cross-origin issues; preserves lease_url target ---- */
+/* ---- Same-origin proxy: must call GET ?add=<IP> with headers (no extra params!) ---- */
 if (isset($_GET['do']) && $_GET['do'] === 'lease') {
-    $target = $leaseActionUrl . ((strpos($leaseActionUrl,'?')!==false) ? '&' : '?') . 'px=' . time();
-    [$ok, $code, $err] = http_touch($target);
+    // EXACTLY one op key: add=<ip>
+    $target = $base . (strpos($base,'?')!==false ? '&' : '?') . 'add=' . rawurlencode($clientIp);
+
+    // Required headers for your endpoint
+    $headers = [
+        'Accept: application/json',
+        'X-IP-Lease-Label: '  . $username,  // label
+        'X-IP-Lease-Source: ' . $sourceTag, // source
+        // optional helpers:
+        'X-Forwarded-For: '   . $clientIp,
+    ];
+
+    [$ok, $code, $err, $body] = http_request($target, 'GET', null, $headers);
+    error_log(sprintf('LUM-ConnTest: lease GET %s http=%d ok=%d', $target, (int)$code, $ok?1:0));
+
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['ok'=>$ok, 'http'=>$code, 'err'=>$ok?null:$err], JSON_UNESCAPED_SLASHES);
+    echo json_encode([
+        'ok'     => $ok,
+        'http'   => $code,
+        'err'    => $ok ? null : $err,
+        'target' => $target,
+        'body'   => substr($body ?? '', 0, 256),
+    ], JSON_UNESCAPED_SLASHES);
     exit;
 }
 
@@ -208,6 +224,7 @@ if ($format === 'json') {
 }
 elseif ($format === 'iframe') {
     header('Content-Type: text/html; charset=utf-8');
+    // Preserve resolved lease base for proxy
     $selfLeaseUrl = $_SERVER['PHP_SELF']
                   . '?format=iframe&do=lease&lease_url='
                   . rawurlencode($base);
@@ -275,15 +292,17 @@ elseif ($format === 'iframe') {
             ev.preventDefault();
             btn.setAttribute('aria-busy', 'true');
             btn.textContent = 'Leasing…';
-            var finish = function(){ setTimeout(function(){ location.reload(); }, 700); };
+            var finish = function(){ setTimeout(function(){ location.reload(); }, 800); };
             try {
-              fetch(url + (url.indexOf('?')>-1 ? '&':'?') + 't=' + Date.now(), { credentials:'include' })
-                .then(function(){ /* ignore body */ })
+              fetch(url, { credentials:'include' })
+                .then(function(r){ return r.json().catch(function(){return {};}); })
+                .then(function(j){
+                  // If you want to inspect once, uncomment:
+                  // console.log('lease proxy', j);
+                })
                 .catch(function(){ /* ignore */ })
                 .finally(finish);
-            } catch (_){
-              finish();
-            }
+            } catch (_){ finish(); }
           });
         })();
       </script>
@@ -293,6 +312,7 @@ elseif ($format === 'iframe') {
     <?php
     exit;
 }
+
 render_header('Test Connection');
 
 /* Hide the top menu/nav when render_menu=0 (useful for iframes) */
