@@ -210,8 +210,12 @@ if ($ldap_search) {
   $webauthn_count = (int)(($authelia_status['webauthn'] ?? [])[$account_identifier] ?? 0);
   $status_ts      = isset($authelia_status['generated_ts']) ? (int)$authelia_status['generated_ts'] : 0;
 
-  // ---- Block actions for protected user ----
-  $MFA_BLOCKED_FOR_USER = (strcasecmp($account_identifier, 'vocoder') === 0);
+  // ---- Block MFA actions if target is in the "admin" group ----
+  $ADMIN_GROUP_NAME = getenv('ADMIN_GROUP_NAME') ?: 'admin';
+  $MFA_BLOCKED_FOR_USER = false;
+  foreach ($target_groups as $g) {
+    if (strcasecmp($g, $ADMIN_GROUP_NAME) === 0) { $MFA_BLOCKED_FOR_USER = true; break; }
+  }
 
   // Errors (after update attempt)
   if ($too_short) { ?>
@@ -446,7 +450,7 @@ document.addEventListener('DOMContentLoaded', updateMeter);
     <div class="panel-body">
       <?php if ($MFA_BLOCKED_FOR_USER) { ?>
         <div class="alert alert-warning" style="margin-bottom:14px;">
-          MFA actions are disabled for this account.
+          MFA actions are disabled for accounts in the “<?php echo htmlspecialchars($ADMIN_GROUP_NAME); ?>” group.
         </div>
       <?php } ?>
       <div class="row" style="margin-bottom:8px;">
