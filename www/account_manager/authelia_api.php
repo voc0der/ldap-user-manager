@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 set_include_path(".:" . __DIR__ . "/../includes/");
 require_once "web_functions.inc.php";
+require_once "ldap_functions.inc.php";
 @session_start();
 set_page_access('admin');
 
@@ -64,6 +65,17 @@ if ($op === 'webauthn.delete') {
   }
 }
 
+// ---- Block MFA ops if target is in the admin group ---------------------------
+$ADMIN_GROUP_NAME = getenv('ADMIN_GROUP_NAME') ?: 'admin';
+$ldap = open_ldap_connection();
+$groups = ldap_user_group_membership($ldap, $user);
+$blocked = false;
+foreach ($groups as $g) {
+  if (strcasecmp($g, $ADMIN_GROUP_NAME) === 0) { $blocked = true; break; }
+}
+if ($blocked) out(['ok'=>false,'error'=>'MFA actions disabled for admin-group users'], 403);
+
+// ---- Build queued action -----------------------------------------------------
 $admin_uid = $GLOBALS['USER_ID'] ?? ($_SESSION['user_id'] ?? 'unknown');
 $ts        = gmdate('Ymd\THis\Z');
 $rand      = bin2hex(random_bytes(4));
