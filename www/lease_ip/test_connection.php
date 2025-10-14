@@ -83,6 +83,17 @@ function current_host_url(): string {
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443');
     return ($https ? 'https://' : 'http://') . $host;
 }
+/** Parse iframe filter keys like "lan,vpn,mtls,leased" (case-insensitive). Unknown tokens ignored. */
+function parse_filter_keys(string $spec): array {
+    $spec = strtolower(trim($spec));
+    if ($spec === '') return [];
+    $out = [];
+    foreach (preg_split('/[,\s;]+/', $spec, -1, PREG_SPLIT_NO_EMPTY) as $p) {
+        $p = trim($p);
+        if (in_array($p, ['lan','vpn','mtls','leased'], true)) $out[$p] = true;
+    }
+    return $out;
+}
 
 /* -------------------- inputs + detection -------------------- */
 $format = strtolower((string)($_GET['format'] ?? 'html'));
@@ -223,6 +234,13 @@ if ($format === 'json') {
     exit;
 }
 elseif ($format === 'iframe') {
+    // --- NEW: filter support for iframe mini ---
+    $filterKeys = parse_filter_keys((string)($_GET['filter'] ?? ''));
+    $showLanRow    = empty($filterKeys) || isset($filterKeys['lan']);
+    $showVpnRow    = empty($filterKeys) || isset($filterKeys['vpn']);
+    $showMtlsRow   = empty($filterKeys) || isset($filterKeys['mtls']);
+    $showLeasedRow = empty($filterKeys) || isset($filterKeys['leased']);
+
     header('Content-Type: text/html; charset=utf-8');
     // Preserve resolved lease base for proxy
     $selfLeaseUrl = $_SERVER['PHP_SELF']
@@ -262,15 +280,25 @@ elseif ($format === 'iframe') {
     </head>
     <body>
       <div class="micro">
+        <?php if ($showLanRow): ?>
         <div class="row"><span class="label">Inside LAN</span>
           <span class="<?php echo $inLan ? 'yes' : 'no'; ?>"><?php echo $inLan ? '✅' : '❌'; ?></span>
         </div>
+        <?php endif; ?>
+
+        <?php if ($showVpnRow): ?>
         <div class="row"><span class="label">On VPN</span>
           <span class="<?php echo $onVpn ? 'yes' : 'no'; ?>"><?php echo $onVpn ? '✅' : '❌'; ?></span>
         </div>
+        <?php endif; ?>
+
+        <?php if ($showMtlsRow): ?>
         <div class="row"><span class="label">mTLS</span>
           <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
         </div>
+        <?php endif; ?>
+
+        <?php if ($showLeasedRow): ?>
         <div class="row">
           <span class="label">Leased IP</span>
           <span class="val">
@@ -280,9 +308,10 @@ elseif ($format === 'iframe') {
             <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
           </span>
         </div>
+        <?php endif; ?>
       </div>
 
-      <?php if ($allNo && $isV4): ?>
+      <?php if ($allNo && $isV4 && $showLeasedRow): ?>
       <script>
         (function(){
           var btn = document.getElementById('leaseBtn');
@@ -297,7 +326,6 @@ elseif ($format === 'iframe') {
               fetch(url, { credentials:'include' })
                 .then(function(r){ return r.json().catch(function(){return {};}); })
                 .then(function(j){
-                  // If you want to inspect once, uncomment:
                   // console.log('lease proxy', j);
                 })
                 .catch(function(){ /* ignore */ })
