@@ -416,6 +416,50 @@ function render_menu() {
       .navbar .username { max-width:120px; } /* keep it from wrapping on phones */
     }
   </style>
+   <?php
+  // --- Auto-expand the navbar on mobile when we're at the LUM root path ---
+  // Figure out if the current request is the base "blank" page.
+  $req_path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+  $base     = rtrim($SERVER_PATH, '/');              // e.g., '/lum'
+  $is_root  =
+      $req_path === '/' && ($base === '' || $base === '/')     // site root when LUM is at '/'
+   || $req_path === $base                                      // '/lum'
+   || $req_path === $base.'/'                                  // '/lum/'
+   || $req_path === $base.'/index.php';                        // '/lum/index.php'
+?>
+<script>
+(function () {
+  var isRoot = <?php echo $is_root ? 'true' : 'false'; ?>;
+  if (!isRoot) return;
+
+  function expandIfMobile() {
+    // Bootstrap "xs" breakpoint for BS3
+    if (window.matchMedia && window.matchMedia('(max-width: 767px)').matches) {
+      var nav = document.getElementById('main-navbar');
+      var toggle = document.querySelector('.navbar-toggle');
+      if (!nav) return;
+
+      // Make the collapsed menu visible/expanded
+      if (nav.classList.contains('collapse') && !nav.classList.contains('in')) {
+        nav.classList.add('in');
+        nav.style.height = 'auto';
+      }
+      if (toggle) {
+        toggle.classList.remove('collapsed');
+        toggle.setAttribute('aria-expanded', 'true');
+      }
+    }
+  }
+
+  // Run immediately (page load) and on resize (debounced)
+  expandIfMobile();
+  var t;
+  window.addEventListener('resize', function () {
+    clearTimeout(t);
+    t = setTimeout(expandIfMobile, 120);
+  });
+})();
+</script>
   <?php
 }
 
