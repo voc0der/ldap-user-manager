@@ -6,6 +6,7 @@ set_include_path( ".:" . __DIR__ . "/../includes/");
 include_once "web_functions.inc.php";
 include_once "ldap_functions.inc.php";
 include_once "module_functions.inc.php";
+include_once "apprise_helpers.inc.php"; // ⬅️ NEW
 set_page_access("admin");
 
 render_header("$ORGANISATION_NAME account manager");
@@ -14,19 +15,32 @@ render_submenu();
 $ldap_connection = open_ldap_connection();
 
 if (isset($_POST['delete_user'])) {
-  $this_user = htmlspecialchars(urldecode($_POST['delete_user']), ENT_QUOTES, 'UTF-8');
-  $del_user = ldap_delete_account($ldap_connection,$this_user);
+  // Use raw UID for LDAP operations; keep a separate HTML-escaped copy for UI
+  $raw_uid   = urldecode($_POST['delete_user']);
+  $safe_uid  = htmlspecialchars($raw_uid, ENT_QUOTES, 'UTF-8');
+
+  // Capture current groups BEFORE deletion (for the Apprise message)
+  $pre_groups = ldap_user_group_membership($ldap_connection, $raw_uid);
+
+  // Identify the admin performing the delete
+  $admin_uid = $GLOBALS['USER_ID'] ?? ($_SESSION['user_id'] ?? 'unknown');
+
+  // Perform delete using the raw UID
+  $del_user = ldap_delete_account($ldap_connection, $raw_uid);
+
   if ($del_user) {
-    render_alert_banner("User <strong>$this_user</strong> was deleted.");
+    // Fire Apprise in your established style
+    apprise_notify_user_deleted($raw_uid, $admin_uid, $pre_groups);
+
+    render_alert_banner("User <strong>$safe_uid</strong> was deleted.");
   } else {
-    render_alert_banner("User <strong>$this_user</strong> wasn't deleted.  See the logs for more information.","danger",15000);
+    render_alert_banner("User <strong>$safe_uid</strong> wasn't deleted.  See the logs for more information.","danger",15000);
   }
 }
 
 $people = ldap_get_user_list($ldap_connection);
 $totalUsers = count($people);
 ?>
-
 <style>
 /* ---- modern chrome (Bootstrap 3 compatible) ---- */
 .wrap-narrow { max-width: 1100px; margin: 18px auto 32px; }
