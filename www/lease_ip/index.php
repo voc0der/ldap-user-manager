@@ -24,6 +24,33 @@ function get_client_ip(): ?string {
 }
 $clientIp = get_client_ip();
 
+// ---- Gate by Authelia group: 'jellyfin' ------------------------------------
+// Trusted proxy headers (must be set by your reverse proxy)
+function _h(string $k): ?string {
+    $hk = 'HTTP_' . strtoupper(str_replace('-', '_', $k));
+    return isset($_SERVER[$hk]) ? trim((string)$_SERVER[$hk]) : null;
+}
+
+// Pull uid from header first, then session (avoid leaking identity on failure)
+$uid_hdr = _h('Remote-User') ?: ($USER_ID ?? ($_SESSION['user_id'] ?? null));
+$groups_raw = _h('Remote-Groups') ?? '';
+$groups_list = array_filter(array_map('trim', preg_split('/[;,\s]+/', $groups_raw)));
+
+// case-insensitive membership check for safety
+$groups_lower = array_map('strtolower', $groups_list);
+$has_jellyfin = in_array('jellyfin', $groups_lower, true);
+
+// Block if not a member of 'jellyfin'
+if (!$uid_hdr || !$has_jellyfin) {
+    render_header('Lease IP');
+    echo '<div class="container" style="max-width:860px;margin-top:20px">'
+       . '<div class="alert alert-danger">'
+       . 'Access denied: this page is only available to members of the <code>jellyfin</code> group.'
+       . '</div></div>';
+    render_footer();
+    exit;
+}
+
 render_header('Lease IP');
 ?>
 <style>
