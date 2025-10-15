@@ -51,6 +51,36 @@ if ($REMOTE_HTTP_HEADERS_LOGIN) {
   validate_passkey_cookie();
 }
 
+/* ============================================================================
+ * Authelia group helpers for UI gating (menu visibility)
+ * - Requires proxy to pass HTTP_REMOTE_GROUPS (Remote-Groups) header
+ * - Configure per-module requirements in $MODULE_GROUP_GATES (modules.inc.php)
+ * ========================================================================== */
+if (!function_exists('lum_remote_groups_lower')) {
+  function lum_remote_groups_lower(): array {
+    $raw = $_SERVER['HTTP_REMOTE_GROUPS'] ?? '';
+    if ($raw === '' || $raw === null) return [];
+    $parts = preg_split('/[;,\s]+/', (string)$raw, -1, PREG_SPLIT_NO_EMPTY);
+    if (!$parts) return [];
+    $parts = array_map('trim', $parts);
+    $parts = array_map('strtolower', $parts);
+    return array_values(array_unique($parts));
+  }
+}
+
+if (!function_exists('lum_user_in_group')) {
+  function lum_user_in_group(string $group): bool {
+    static $cache = null;
+    if ($cache === null) $cache = lum_remote_groups_lower();
+    return in_array(strtolower($group), $cache, true);
+  }
+}
+
+if (!defined('GROUP_GATE_ADMIN_BYPASS')) {
+  // If true, admins can see gated menu items even if they aren't in the group.
+  define('GROUP_GATE_ADMIN_BYPASS', true);
+}
+
 
 ######################################################
 
@@ -100,8 +130,10 @@ function login_via_headers() {
   global $IS_ADMIN, $USER_ID, $VALIDATED, $LDAP;
   //['admins_group'];
   $USER_ID = $_SERVER['HTTP_REMOTE_USER'];
-  $remote_groups = explode(',',$_SERVER['HTTP_REMOTE_GROUPS']);
-  $IS_ADMIN = in_array($LDAP['admins_group'],$remote_groups);
+  // Accept semicolons/commas/whitespace as separators for robustness
+  $groups_raw = $_SERVER['HTTP_REMOTE_GROUPS'] ?? '';
+  $remote_groups = preg_split('/[;,\s]+/', (string)$groups_raw, -1, PREG_SPLIT_NO_EMPTY);
+  $IS_ADMIN = in_array($LDAP['admins_group'],$remote_groups ?: []);
   // users are always validated as we assume, that the auth server does this
   $VALIDATED = true;
 
@@ -328,6 +360,14 @@ function format_module_label($module) {
 function render_menu() {
   // Bootstrap 3 navbar w/ hamburger + simple username label (no dropdown)
   global $SITE_NAME, $MODULES, $THIS_MODULE, $VALIDATED, $IS_ADMIN, $USER_ID, $SERVER_PATH, $CUSTOM_LOGO, $MFA_SETTINGS_URL;
+  // New: access to gating map + header-mode flag
+  global $MODULE_GROUP_GATES, $REMOTE_HTTP_HEADERS_LOGIN;
+
+  // Normalize gates map
+  $MODULE_GROUP_GATES = (isset($MODULE_GROUP_GATES) && is_array($MODULE_GROUP_GATES)) ? $MODULE_GROUP_GATES : [];
+
+  // Cache user groups (lowercased) only when using header-based login
+  $USER_GROUPS_LOWER = $REMOTE_HTTP_HEADERS_LOGIN ? lum_remote_groups_lower() : [];
 
   ?>
   <nav class="navbar navbar-default">
@@ -362,12 +402,26 @@ function render_menu() {
           foreach ($MODULES as $module => $access) {
             $name = format_module_label(stripslashes($module));
 
+            // Base visibility (existing logic)
             $show = true;
             if ($VALIDATED) {
               if ($access == 'hidden_on_login' && $access != 'always') $show = false;
               if (!$IS_ADMIN && $access == 'admin' && $access != 'always') $show = false;
             } else {
               if ($access != 'hidden_on_login' && $access != 'always') $show = false;
+            }
+
+            // Additional group-gating based on $MODULE_GROUP_GATES
+            // Only apply when logged-in via headers (so groups are known)
+            if ($show && $VALIDATED && $REMOTE_HTTP_HEADERS_LOGIN && !empty($MODULE_GROUP_GATES[$module])) {
+              $needs = array_map('strtolower', (array)$MODULE_GROUP_GATES[$module]);
+              $hasAny = false;
+              foreach ($needs as $g) {
+                if (in_array($g, $USER_GROUPS_LOWER, true)) { $hasAny = true; break; }
+              }
+              if (!$hasAny && !(GROUP_GATE_ADMIN_BYPASS && $IS_ADMIN)) {
+                $show = false;
+              }
             }
 
             if ($show) {
