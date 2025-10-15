@@ -15,6 +15,11 @@
                     'lease_ip'        => 'auth',
                     'mtls_certificate' => 'auth',
                   );
+// Optional per-module group gates (require ANY of these groups to see menu entry)
+$MODULE_GROUP_GATES = [
+  'lease_ip'         => ['jellyfin'], // only show Lease IP if in `jellyfin`
+  'mtls_certificate' => ['mtls'],     // only show mTLS Certificate if in `mtls`
+];
 
 if ($ACCOUNT_REQUESTS_ENABLED == TRUE) {
   if ($ACCOUNT_REQUESTS_ALWAYS_SHOW == TRUE) {
