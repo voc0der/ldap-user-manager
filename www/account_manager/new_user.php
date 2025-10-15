@@ -1,11 +1,12 @@
 <?php
-// www/account_manager/new_user.php  (modernized styling only)
+// www/account_manager/new_user.php  (modernized styling + hard validation + Apprise on create)
 
 set_include_path(".:" . __DIR__ . "/../includes/");
 
 include_once "web_functions.inc.php";
 include_once "ldap_functions.inc.php";
 include_once "module_functions.inc.php";
+include_once "apprise_helpers.inc.php"; // for mtls_apprise_notify + helpers
 
 // ---- Password Policy (adjust as needed) ----
 const DEFAULT_MIN_LEN = 12;
@@ -13,18 +14,28 @@ const ADMIN_MIN_LEN   = 15;   // for admin/privileged roles
 const NO_MFA_MIN_LEN  = 15;   // for accounts without MFA
 const MAX_LEN         = 256;  // allow long passphrases
 
+// make sure mail sending flag is defined to avoid notices
+if (!isset($EMAIL_SENDING_ENABLED)) {
+  // infer from SMTP config if present
+  $EMAIL_SENDING_ENABLED = !empty($SMTP['host'] ?? '');
+}
+
 // Unicode-aware length
 function pw_len(string $s): int {
   if (function_exists('mb_strlen')) return mb_strlen($s, 'UTF-8');
   return strlen($s);
 }
 
+// Safely predeclare common attribute arrays to avoid undefined-index notices
+$uid = $cn = $givenname = $sn = $mail = [];
+
+// -------- Attribute map wiring --------
 $attribute_map = $LDAP['default_attribute_map'];
 if (isset($LDAP['account_additional_attributes'])) {
   $attribute_map = ldap_complete_attribute_array($attribute_map, $LDAP['account_additional_attributes']);
 }
 if (!array_key_exists($LDAP['account_attribute'], $attribute_map)) {
-  $attribute_r = array_merge($attribute_map, array($LDAP['account_attribute'] => array("label" => "Account UID")));
+  $attribute_map = array_merge($attribute_map, array($LDAP['account_attribute'] => array("label" => "Account UID")));
 }
 
 if (isset($_POST['setup_admin_account'])) {
@@ -57,36 +68,43 @@ $account_attribute = $LDAP['account_attribute'];
 
 $new_account_r = array();
 
-// Build attribute values from POST/FILE/defaults
+// -------- Build attribute values from POST/FILE/defaults (robust) --------
 foreach ($attribute_map as $attribute => $attr_r) {
 
-  if (isset($_FILES[$attribute]['size']) && $_FILES[$attribute]['size'] > 0) {
+  // Files
+  if (!empty($_FILES[$attribute]['size'])) {
     $this_attribute = array();
     $this_attribute['count'] = 1;
-    $this_attribute[0] = file_get_contents($_FILES[$attribute]['tmp_name']);
+    $this_attribute[0] = @file_get_contents($_FILES[$attribute]['tmp_name']) ?: '';
     $$attribute = $this_attribute;
     $new_account_r[$attribute] = $this_attribute;
     unset($new_account_r[$attribute]['count']);
   }
 
+  // POST (strings or arrays)
   if (isset($_POST[$attribute])) {
     $this_attribute = array();
 
     if (is_array($_POST[$attribute]) && count($_POST[$attribute]) > 0) {
       foreach($_POST[$attribute] as $key => $value) {
+        $value = (string)$value;
         if ($value !== "") { $this_attribute[$key] = filter_var($value, FILTER_SANITIZE_FULL_SPECIAL_CHARS); }
       }
       if (count($this_attribute) > 0) {
         $this_attribute['count'] = count($this_attribute);
         $$attribute = $this_attribute;
       }
-    } elseif ($_POST[$attribute] !== "") {
-      $this_attribute['count'] = 1;
-      $this_attribute[0] = filter_var($_POST[$attribute], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
-      $$attribute = $this_attribute;
+    } else {
+      $val = (string)$_POST[$attribute];
+      if ($val !== "") {
+        $this_attribute['count'] = 1;
+        $this_attribute[0] = filter_var($val, FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+        $$attribute = $this_attribute;
+      }
     }
   }
 
+  // Defaults
   if (!isset($$attribute) && isset($attr_r['default'])) {
     $$attribute['count'] = 1;
     $$attribute[0] = $attr_r['default'];
@@ -98,94 +116,116 @@ foreach ($attribute_map as $attribute => $attr_r) {
   }
 }
 
-// Pre-fill from account_request (optional)
+// -------- Pre-fill from account_request (optional; safe) --------
 if (isset($_GET['account_request'])) {
-  $givenname[0] = filter_var($_GET['first_name'], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
-  $new_account_r['givenname'] = $givenname[0];
+  $givenname0 = isset($_GET['first_name']) ? (string)$_GET['first_name'] : '';
+  $sn0        = isset($_GET['last_name'])  ? (string)$_GET['last_name']  : '';
+  $mail0      = isset($_GET['email'])      ? (string)$_GET['email']      : '';
 
-  $sn[0] = filter_var($_GET['last_name'], FILTER_SANITIZE_FULL_SPECIAL_CHARS);
-  $new_account_r['sn'] = $sn[0];
+  if ($givenname0 !== '') {
+    $givenname = ['count'=>1, 0 => filter_var($givenname0, FILTER_SANITIZE_FULL_SPECIAL_CHARS)];
+    $new_account_r['givenname'] = $givenname;
+    unset($new_account_r['givenname']['count']);
+  }
+  if ($sn0 !== '') {
+    $sn = ['count'=>1, 0 => filter_var($sn0, FILTER_SANITIZE_FULL_SPECIAL_CHARS)];
+    $new_account_r['sn'] = $sn;
+    unset($new_account_r['sn']['count']);
+  }
 
-  $mail[0] = filter_var($_GET['email'], FILTER_SANITIZE_EMAIL);
-  if ($mail[0] == "") {
-    if (isset($EMAIL_DOMAIN)) {
-      $mail[0] = $uid . "@" . $EMAIL_DOMAIN;   // (kept as-is per your original logic)
+  if ($mail0 !== '') {
+    $mail = ['count'=>1, 0 => filter_var($mail0, FILTER_SANITIZE_EMAIL)];
+    $disabled_email_tickbox = FALSE;
+  } else {
+    // synthesize from UID if available
+    $uid0 = $uid[0] ?? '';
+    if ($uid0 !== '' && isset($EMAIL_DOMAIN)) {
+      $mail = ['count'=>1, 0 => ($uid0 . '@' . $EMAIL_DOMAIN)];
       $disabled_email_tickbox = FALSE;
     }
-  } else {
-    $disabled_email_tickbox = FALSE;
   }
-  $new_account_r['mail'] = $mail;
-  unset($new_account_r['mail']['count']);
+  if (!empty($mail)) {
+    $new_account_r['mail'] = $mail;
+    unset($new_account_r['mail']['count']);
+  }
 }
 
-// Generate missing uid/cn on request or form post
+// -------- Generate missing uid/cn on request or form post --------
 if (isset($_GET['account_request']) || isset($_POST['create_account'])) {
-  if (!isset($uid[0])) {
-    $uid[0] = generate_username($givenname[0], $sn[0]);
+  $given0 = $givenname[0] ?? '';
+  $sn0    = $sn[0] ?? '';
+  if (!isset($uid[0]) || $uid[0] === '') {
+    $uid0 = generate_username($given0, $sn0);
+    $uid  = ['count'=>1, 0 => $uid0];
     $new_account_r['uid'] = $uid;
     unset($new_account_r['uid']['count']);
   }
-  if (!isset($cn[0])) {
-    if ($ENFORCE_SAFE_SYSTEM_NAMES == TRUE) {
-      $cn[0] = $givenname[0] . $sn[0];
+  if (!isset($cn[0]) || $cn[0] === '') {
+    if (!empty($ENFORCE_SAFE_SYSTEM_NAMES)) {
+      $cn0 = $given0 . $sn0;
     } else {
-      $cn[0] = $givenname[0] . " " . $sn[0];
+      $cn0 = trim($given0 . ' ' . $sn0);
     }
+    $cn = ['count'=>1, 0 => $cn0];
     $new_account_r['cn'] = $cn;
     unset($new_account_r['cn']['count']);
   }
 }
 
+// -------- Process create --------
 if (isset($_POST['create_account'])) {
-  $password = $_POST['password'] ?? '';
-  $new_account_r['password'][0] = $password;
+  $password = (string)($_POST['password'] ?? '');
+  if ($password !== '') { $new_account_r['password'][0] = $password; }
 
-  $account_identifier = $new_account_r[$account_attribute][0] ?? '';
-  $this_cn        = $cn[0]          ?? '';
-  $this_mail      = $mail[0]        ?? '';
-  $this_givenname = $givenname[0]   ?? '';
-  $this_sn        = $sn[0]          ?? '';
+  // Safe getters
+  $account_identifier = (string)($new_account_r[$account_attribute][0] ?? ($uid[0] ?? ''));
+  $this_cn        = (string)($cn[0]        ?? '');
+  $this_mail      = (string)($mail[0]      ?? '');
+  $this_givenname = (string)($givenname[0] ?? '');
+  $this_sn        = (string)($sn[0]        ?? '');
   $this_password  = $password;
 
-  // Basic required fields
+  // ---- Server-side hard validation (requireds)
   if ($this_cn === "") { $invalid_cn = TRUE; }
-  if (($account_identifier === "") && !$invalid_cn) { $invalid_account_identifier = TRUE; }
+  if ($account_identifier === "") { $invalid_account_identifier = TRUE; }
   if ($this_givenname === "") { $invalid_givenname = TRUE; }
   if ($this_sn === "") { $invalid_sn = TRUE; }
-  if (isset($this_mail) && !is_valid_email($this_mail)) { $invalid_email = TRUE; }
+  if ($this_mail !== "" && !is_valid_email($this_mail)) { $invalid_email = TRUE; }
   if ($password !== ($_POST['password_match'] ?? '')) { $mismatched_passwords = TRUE; }
-  if ($ENFORCE_SAFE_SYSTEM_NAMES == TRUE && !preg_match("/$USERNAME_REGEX/", $account_identifier)) { $invalid_account_identifier = TRUE; }
+  if (!empty($ENFORCE_SAFE_SYSTEM_NAMES) && !preg_match("/$USERNAME_REGEX/", $account_identifier)) { $invalid_account_identifier = TRUE; }
 
-  // ---- Length-only password policy
+  // ---- Length-only password policy (new accounts)
   $min_len = ($admin_setup ? max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN) : NO_MFA_MIN_LEN);
   $len = pw_len($password);
   if ($len < $min_len) { $too_short = TRUE; }
   if ($len > MAX_LEN)  { $too_long  = TRUE; }
 
-  // Send email?
-  if (isset($_POST['send_email']) && isset($mail) && $EMAIL_SENDING_ENABLED == TRUE) {
-    $send_user_email = TRUE;
+  // ---- Decide whether to send email
+  $send_user_email = false;
+  if (isset($_POST['send_email']) && $EMAIL_SENDING_ENABLED == TRUE && $this_mail !== '' && is_valid_email($this_mail)) {
+    $send_user_email = true;
   }
 
-  if (    !$mismatched_passwords
-      &&  !$too_short
-      &&  !$too_long
-      &&  !$invalid_account_identifier
-      &&  !$invalid_cn
-      &&  !$invalid_email
-      &&  !$invalid_givenname
-      &&  !$invalid_sn
-      &&   isset($this_password)
-     ) {
+  $has_errors =
+        $mismatched_passwords
+     || $too_short
+     || $too_long
+     || $invalid_account_identifier
+     || $invalid_cn
+     || $invalid_email
+     || $invalid_givenname
+     || $invalid_sn
+     || $this_password === '';
 
+  if (!$has_errors) {
     $ldap_connection = open_ldap_connection();
     $new_account = ldap_new_account($ldap_connection, $new_account_r);
 
     if ($new_account) {
       $creation_message = "The account was created.";
 
-      if (isset($send_user_email) && $send_user_email === TRUE) {
+      // Send email to user (optional)
+      if ($send_user_email) {
         include_once "mail_functions.inc.php";
         $mail_body    = parse_mail_text($new_account_mail_body, $password, $account_identifier, $this_givenname, $this_sn);
         $mail_subject = parse_mail_text($new_account_mail_subject, $password, $account_identifier, $this_givenname, $this_sn);
@@ -199,6 +239,7 @@ if (isset($_POST['create_account'])) {
         }
       }
 
+      // Admin-setup: add to admins group and clean temporary entries
       if ($admin_setup === TRUE) {
         $member_add = ldap_add_member_to_group($ldap_connection, $LDAP['admins_group'], $account_identifier);
         if (!$member_add) { ?>
@@ -212,6 +253,32 @@ if (isset($_POST['create_account'])) {
         ldap_delete_member_from_group($ldap_connection, $LDAP['admins_group'], "");
         if (isset($DEFAULT_USER_GROUP)) { ldap_delete_member_from_group($ldap_connection, $DEFAULT_USER_GROUP, ""); }
       }
+
+      // ---- Apprise: User Created (after any group adjustments)
+      $admin_uid   = $GLOBALS['USER_ID'] ?? ($_SESSION['user_id'] ?? 'unknown');
+      $post_groups = ldap_user_group_membership($ldap_connection, $account_identifier);
+      // helper might not exist in older include—fallback gracefully
+      if (!function_exists('apprise_notify_user_created')) {
+        // local inline variant using the same style
+        if (function_exists('mtls_apprise_notify')) {
+          $host = $_SERVER['HTTP_HOST'] ?? php_uname('n') ?? 'host';
+          $ip   = function_exists('apprise_client_ip') ? apprise_client_ip() : ($_SERVER['REMOTE_ADDR'] ?? '');
+          $grp  = trim(implode(', ', $post_groups));
+          $grp  = $grp === '' ? 'none' : $grp;
+          $body = '🔐 `' . htmlspecialchars($host, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '` **User Created**:<br />'
+                . 'User: <code>' . htmlspecialchars($account_identifier, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+                . 'Email: <code>' . htmlspecialchars(($this_mail ?: 'none'), ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+                . 'By: <code>'   . htmlspecialchars($admin_uid, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+                . 'IP: <code>'   . htmlspecialchars($ip, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+                . 'Groups: <code>' . htmlspecialchars($grp, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+          mtls_apprise_notify($body);
+        }
+      } else {
+        // use helper if you've added it to apprise_helpers.inc.php
+        apprise_notify_user_created($account_identifier, $admin_uid, $this_mail, $post_groups);
+      }
+      // -------------------------------------------------------
+
       ?>
       <div class="alert alert-success">
         <p class="text-center"><?php print $creation_message; ?></p>
@@ -242,39 +309,39 @@ if (isset($_POST['create_account'])) {
 
 // ---------- Enable "Email these credentials" if a valid recipient email is present ----------
 if ($EMAIL_SENDING_ENABLED == TRUE && $admin_setup != TRUE) {
-    // Try to discover the current email value
-    $recipient_email = '';
+  // Try to discover the current email value
+  $recipient_email = '';
 
-    // Prefer what you've already collected in $new_account_r
-    if (isset($new_account_r['mail'][0]) && is_string($new_account_r['mail'][0])) {
-        $recipient_email = trim($new_account_r['mail'][0]);
-    } elseif (isset($mail[0]) && is_string($mail[0])) {
-        $recipient_email = trim($mail[0]);
-    }
+  // Prefer what you've already collected in $new_account_r
+  if (isset($new_account_r['mail'][0]) && is_string($new_account_r['mail'][0])) {
+    $recipient_email = trim($new_account_r['mail'][0]);
+  } elseif (isset($mail[0]) && is_string($mail[0])) {
+    $recipient_email = trim($mail[0]);
+  }
 
-    // Optional: synthesize from UID + EMAIL_DOMAIN if we have both and no email yet
-    if ($recipient_email === '' && isset($EMAIL_DOMAIN) && isset($uid[0]) && $uid[0] !== '') {
-        $recipient_email = $uid[0] . '@' . $EMAIL_DOMAIN;
-        // reflect it back into the structures so the form shows it
-        $mail[0] = $recipient_email;
-        $new_account_r['mail'] = ['0' => $recipient_email];
-    }
+  // Optional: synthesize from UID + EMAIL_DOMAIN if we have both and no email yet
+  if ($recipient_email === '' && isset($EMAIL_DOMAIN) && !empty($uid[0] ?? '')) {
+    $recipient_email = $uid[0] . '@' . $EMAIL_DOMAIN;
+    // reflect it back into the structures so the form shows it
+    $mail[0] = $recipient_email;
+    $new_account_r['mail'] = ['0' => $recipient_email];
+  }
 
-    // Finally decide if checkbox should be enabled
-    $disabled_email_tickbox = !( $recipient_email !== '' && is_valid_email($recipient_email) );
+  // Finally decide if checkbox should be enabled
+  $disabled_email_tickbox = !($recipient_email !== '' && is_valid_email($recipient_email));
 }
 
 
-// Show any errors
+// -------- Render errors (if any) --------
 $errors = "";
-if ($invalid_cn)                { $errors .= "<li>The Common Name is required</li>\n"; }
-if ($invalid_givenname)         { $errors .= "<li>First Name is required</li>\n"; }
-if ($invalid_sn)                { $errors .= "<li>Last Name is required</li>\n"; }
-if ($invalid_account_identifier){ $errors .= "<li>The account identifier (" . $attribute_map[$account_attribute]['label'] . ") is invalid.</li>\n"; }
-if ($invalid_email)             { $errors .= "<li>The email address is invalid</li>\n"; }
-if ($mismatched_passwords)      { $errors .= "<li>The passwords are mismatched</li>\n"; }
-if ($too_short)                 { $errors .= "<li>Password is too short (minimum " . max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN) . " characters for new accounts)</li>\n"; }
-if ($too_long)                  { $errors .= "<li>Password is too long (maximum " . (int)MAX_LEN . " characters)</li>\n"; }
+if ($invalid_cn)                 { $errors .= "<li>The Common Name is required</li>\n"; }
+if ($invalid_givenname)          { $errors .= "<li>First Name is required</li>\n"; }
+if ($invalid_sn)                 { $errors .= "<li>Last Name is required</li>\n"; }
+if ($invalid_account_identifier) { $errors .= "<li>The account identifier (" . $attribute_map[$account_attribute]['label'] . ") is invalid.</li>\n"; }
+if ($invalid_email)              { $errors .= "<li>The email address is invalid</li>\n"; }
+if ($mismatched_passwords)       { $errors .= "<li>The passwords are mismatched</li>\n"; }
+if ($too_short)                  { $errors .= "<li>Password is too short (minimum " . (int)max(ADMIN_MIN_LEN, NO_MFA_MIN_LEN) . " characters for new accounts)</li>\n"; }
+if ($too_long)                   { $errors .= "<li>Password is too long (maximum " . (int)MAX_LEN . " characters)</li>\n"; }
 
 if ($errors !== "") { ?>
   <div class="alert alert-warning">
@@ -340,29 +407,21 @@ document.addEventListener('DOMContentLoaded', function(){
 </script>
 
 <script type="text/javascript">
+// enable/disable "Email these credentials" based on visible email input
 document.addEventListener('DOMContentLoaded', function () {
-  var emailInput = document.getElementById('mail');                // id used by render_js_email_generator(..., 'mail')
-  var sendBox    = document.getElementById('send_email_checkbox'); // your checkbox id
-
+  var emailInput = document.getElementById('mail');
+  var sendBox    = document.getElementById('send_email_checkbox');
   if (!emailInput || !sendBox) return;
 
   function looksLikeEmail(v){
     v = (v || '').trim();
-    // simple client-side check; server still uses is_valid_email()
     return v.length > 3 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v);
   }
-
   function refreshCheckbox() {
     sendBox.disabled = !looksLikeEmail(emailInput.value);
-    // Optional: auto-check when it becomes valid
-    if (!sendBox.disabled && !sendBox.checked) {
-      // leave it unchecked by default; comment this out if you want auto-check:
-      // sendBox.checked = true;
-    }
   }
-
   emailInput.addEventListener('input', refreshCheckbox);
-  refreshCheckbox(); // initialize on page load
+  refreshCheckbox();
 });
 </script>
 
@@ -394,11 +453,12 @@ document.addEventListener('DOMContentLoaded', function () {
         <input type="hidden" name="create_account">
 
         <?php
+          $tabindex = 1;
           foreach ($attribute_map as $attribute => $attr_r) {
             $label = $attr_r['label'];
             $onkeyup = isset($attr_r['onkeyup']) ? $attr_r['onkeyup'] : "";
             if ($attribute == $LDAP['account_attribute']) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
-            if (isset($attr_r['required']) && $attr_r['required'] == TRUE) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
+            if (!empty($attr_r['required'])) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
             $these_values = isset($$attribute) ? $$attribute : array();
             $inputtype = isset($attr_r['inputtype']) ? $attr_r['inputtype'] : "";
             render_attribute_fields($attribute,$label,$these_values,"",$onkeyup,$inputtype,$tabindex);
