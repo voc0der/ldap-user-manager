@@ -1,9 +1,10 @@
 <?php
-// change_password/index.php (modernized, single global min length)
+// change_password/index.php (modernized, single global min length + Apprise notify)
 
 set_include_path(".:" . __DIR__ . "/../includes/");
 include_once "web_functions.inc.php";
 include_once "ldap_functions.inc.php";
+@include_once "apprise_helpers.inc.php"; // mtls_apprise_notify(), apprise_client_ip()
 
 set_page_access("user");
 
@@ -37,24 +38,42 @@ if (isset($_POST['change_password'])) {
         if ($len > MAX_LEN)  { $too_long  = 1; }
     }
 
+    // Only attempt LDAP change if all checks passed
     if (!isset($empty_pw, $empty_confirm, $mismatched, $too_short, $too_long)) {
         $ldap_connection = open_ldap_connection();
-        ldap_change_password($ldap_connection, $USER_ID, $password) or die("change_ldap_password() failed.");
+        $changed = @ldap_change_password($ldap_connection, $USER_ID, $password);
 
-        render_header("$ORGANISATION_NAME account manager - password changed"); ?>
-        <style>
-          .panel-modern{background:#0b0f13;border:1px solid rgba(255,255,255,.08);border-radius:12px}
-          .panel-modern .panel-heading{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));color:#cfe9ff;letter-spacing:.4px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,.08)}
-        </style>
-        <div class="container" style="max-width:720px;margin:24px auto">
-          <div class="panel panel-modern">
-            <div class="panel-heading text-center">Success</div>
-            <div class="panel-body">
-              <p>Your password has been updated.</p>
+        if ($changed) {
+            // ---- Apprise: Password Changed (self-service)
+            if (function_exists('mtls_apprise_notify')) {
+                $host = $_SERVER['HTTP_HOST'] ?? php_uname('n') ?? 'host';
+                $ip   = function_exists('apprise_client_ip')
+                      ? apprise_client_ip()
+                      : ($_SERVER['REMOTE_ADDR'] ?? '');
+                $body = '🔐 `' . htmlspecialchars($host, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '` **Password Changed**:<br />'
+                      . 'User: <code>' . htmlspecialchars($USER_ID, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code><br />'
+                      . 'IP: <code>'   . htmlspecialchars($ip,   ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8') . '</code>';
+                mtls_apprise_notify($body);
+            }
+
+            render_header("$ORGANISATION_NAME account manager - password changed"); ?>
+            <style>
+              .panel-modern{background:#0b0f13;border:1px solid rgba(255,255,255,.08);border-radius:12px}
+              .panel-modern .panel-heading{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));color:#cfe9ff;letter-spacing:.4px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,.08)}
+            </style>
+            <div class="container" style="max-width:720px;margin:24px auto">
+              <div class="panel panel-modern">
+                <div class="panel-heading text-center">Success</div>
+                <div class="panel-body">
+                  <p>Your password has been updated.</p>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        <?php render_footer(); exit;
+            <?php render_footer(); exit;
+        } else {
+            // Graceful failure: bubble a generic error, not die()
+            $change_failed = 1;
+        }
     }
 }
 
@@ -63,11 +82,13 @@ render_header("Change your $ORGANISATION_NAME password");
 
 // collect alert messages for inline display
 $alerts = [];
-if (isset($empty_pw))     $alerts[] = "Please enter a password.";
-if (isset($empty_confirm))$alerts[] = "Please confirm your password.";
-if (isset($mismatched))   $alerts[] = "The passwords didn't match.";
-if (isset($too_short))    $alerts[] = "Password is too short. Minimum length is " . (int)$min_len . " characters.";
-if (isset($too_long))     $alerts[] = "Password is too long. Maximum length is " . (int)MAX_LEN . " characters.";
+if (isset($empty_pw))      $alerts[] = "Please enter a password.";
+if (isset($empty_confirm)) $alerts[] = "Please confirm your password.";
+if (isset($mismatched))    $alerts[] = "The passwords didn't match.";
+if (isset($too_short))     $alerts[] = "Password is too short. Minimum length is " . (int)$min_len . " characters.";
+if (isset($too_long))      $alerts[] = "Password is too long. Maximum length is " . (int)MAX_LEN . " characters.";
+if (isset($change_failed)) $alerts[] = "We couldn’t update your password right now. Please try again or contact support.";
+
 ?>
 <style>
 /* ---------- modern chrome (Bootstrap 3 friendly) ---------- */
