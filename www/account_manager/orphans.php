@@ -5,7 +5,7 @@ declare(strict_types=1);
  * MFA Orphans (TOTP + WebAuthn)
  * - Reads status.json
  * - Compares subjects to LDAP UIDs (case-insensitive)
- * - Lets you queue deletes via authelia_api.php (one, both, bulk, all)
+ * - Queue deletes via authelia_api.php (one, both, bulk, all) using AJAX
  */
 
 set_include_path(".:" . __DIR__ . "/../includes/");
@@ -18,7 +18,7 @@ require_once "apprise_helpers.inc.php";
 set_page_access('admin');
 
 // ====== TUNABLES =============================================================
-$MATCH_BY_UID_ONLY = true; // treat subject as orphan unless it matches an LDAP uid
+$MATCH_BY_UID_ONLY = true; // consider a subject orphan unless it matches an LDAP uid
 
 // CSRF token (harmless if API ignores; future-proof)
 if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
@@ -29,7 +29,7 @@ $AUTHELIA_DIR = getenv('AUTHELIA_DIR')
   ?: (realpath(__DIR__ . '/../data/authelia') ?: (__DIR__ . '/../data/authelia'));
 $STATUS = $AUTHELIA_DIR . '/status.json';
 
-// API endpoint (correct path)
+// Correct API endpoint
 $API    = $THIS_MODULE_PATH . '/authelia_api.php';
 
 // Helpers
@@ -77,7 +77,6 @@ $subjects = [];      // unique set of orphan subjects
 
 $resolveNotOrphan = function(string $subject) use ($uidsLC, $MATCH_BY_UID_ONLY): bool {
   $sl = strtolower(trim($subject));
-  // UID-only logic
   return isset($uidsLC[$sl]);
 };
 
@@ -99,13 +98,19 @@ foreach ($web as $subj => $count) {
 }
 $totalSubjects = count($subjects);
 
+// Fast membership sets to control "Delete BOTH" visibility
+$hasTotp = [];
+foreach ($orphTOTP as $s) $hasTotp[$s] = true;
+$hasWeb  = [];
+foreach ($orphWeb as $s => $_) $hasWeb[$s] = true;
+
 // ----------------------------------------------------------------------------
 // Render
 render_header("$ORGANISATION_NAME account manager");
 render_submenu();
 ?>
 <style>
-/* ---- higher-contrast dark UI, Bootstrap 3 friendly ---- */
+/* ---- dark UI, Bootstrap 3 friendly ---- */
 .wrap-narrow { max-width: 1100px; margin: 18px auto 32px; }
 .panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.10); border-radius:12px; overflow:hidden; }
 .panel-modern .panel-heading {
@@ -186,20 +191,17 @@ render_submenu();
       <h4 style="margin-top:0;">TOTP (orphaned)</h4>
       <div class="table-responsive">
         <table class="table table-striped table-modern">
-          <thead><tr><th style="width:40px"><input type="checkbox" id="chk_all_totp"></th><th>Authelia subject</th><th style="width:200px">Action</th></tr></thead>
+          <thead><tr><th style="width:40px"><input type="checkbox" id="chk_all_totp"></th><th>Authelia subject</th><th style="width:280px">Action</th></tr></thead>
           <tbody>
           <?php foreach ($orphTOTP as $subj): ?>
             <tr data-kind="totp" data-user="<?php echo h($subj); ?>">
               <td><input type="checkbox" class="chk_one"></td>
               <td><code><?php echo h($subj); ?></code></td>
               <td>
-                <form method="post" action="<?php echo h($API); ?>" class="inline frm-one">
-                  <input type="hidden" name="op" value="totp.delete">
-                  <input type="hidden" name="user" value="<?php echo h($subj); ?>">
-                  <input type="hidden" name="csrf" value="<?php echo h($CSRF); ?>">
-                  <button type="submit" class="btn btn-xs btn-danger btn-pill">Delete TOTP</button>
-                </form>
-                <button type="button" class="btn btn-xs btn-soft btn-pill btn-delete-both" data-user="<?php echo h($subj); ?>">Delete BOTH</button>
+                <button type="button" class="btn btn-xs btn-danger btn-pill btn-del-totp" data-user="<?php echo h($subj); ?>">Delete TOTP</button>
+                <?php if (isset($hasWeb[$subj])): ?>
+                  <button type="button" class="btn btn-xs btn-soft btn-pill btn-delete-both" data-user="<?php echo h($subj); ?>">Delete TOTP + WebAuthn</button>
+                <?php endif; ?>
               </td>
             </tr>
           <?php endforeach; ?>
@@ -212,7 +214,7 @@ render_submenu();
       <h4>WebAuthn (orphaned)</h4>
       <div class="table-responsive">
         <table class="table table-striped table-modern">
-          <thead><tr><th style="width:40px"><input type="checkbox" id="chk_all_web"></th><th>Authelia subject</th><th>Device count</th><th style="width:240px">Action</th></tr></thead>
+          <thead><tr><th style="width:40px"><input type="checkbox" id="chk_all_web"></th><th>Authelia subject</th><th>Device count</th><th style="width:320px">Action</th></tr></thead>
           <tbody>
           <?php foreach ($orphWeb as $subj => $cnt): ?>
             <tr data-kind="web" data-user="<?php echo h($subj); ?>">
@@ -220,14 +222,10 @@ render_submenu();
               <td><code><?php echo h($subj); ?></code></td>
               <td><?php echo (int)$cnt; ?></td>
               <td>
-                <form method="post" action="<?php echo h($API); ?>" class="inline frm-one">
-                  <input type="hidden" name="op" value="webauthn.delete">
-                  <input type="hidden" name="user" value="<?php echo h($subj); ?>">
-                  <input type="hidden" name="scope" value="all">
-                  <input type="hidden" name="csrf" value="<?php echo h($CSRF); ?>">
-                  <button type="submit" class="btn btn-xs btn-danger btn-pill">Delete WebAuthn (all)</button>
-                </form>
-                <button type="button" class="btn btn-xs btn-soft btn-pill btn-delete-both" data-user="<?php echo h($subj); ?>">Delete BOTH</button>
+                <button type="button" class="btn btn-xs btn-danger btn-pill btn-del-web" data-user="<?php echo h($subj); ?>">Delete WebAuthn (all)</button>
+                <?php if (isset($hasTotp[$subj])): ?>
+                  <button type="button" class="btn btn-xs btn-soft btn-pill btn-delete-both" data-user="<?php echo h($subj); ?>">Delete TOTP + WebAuthn</button>
+                <?php endif; ?>
               </td>
             </tr>
           <?php endforeach; ?>
@@ -247,20 +245,57 @@ render_submenu();
 </div>
 
 <script>
-// basic jQuery is already present in LUM
 (function($){
-  var API = <?php echo json_encode($API); ?>;
+  var API  = <?php echo json_encode($API); ?>;
   var CSRF = <?php echo json_encode($CSRF); ?>;
 
   function postOne(payload) {
-    // Use AJAX (same as show_user.php does) so we can show inline status
-    return $.ajax({
-      url: API,
-      type: 'POST',
-      data: payload,
-      dataType: 'json'
-    });
+    return $.ajax({ url: API, type: 'POST', data: payload, dataType: 'json' });
   }
+  function softReload(delayMs){
+    setTimeout(function(){ window.location.reload(); }, delayMs || 900);
+  }
+  function setStatus(msg){ $('#bulk_status').text(msg); }
+
+  // Single-row: Delete TOTP
+  $(document).on('click', '.btn-del-totp', function(){
+    var user = $(this).data('user');
+    var $btn = $(this);
+    $btn.prop('disabled', true).text('Queuing…');
+    setStatus('Queuing TOTP delete for ' + user + '…');
+    postOne({op:'totp.delete', user:user, csrf:CSRF})
+      .done(function(res){
+        setStatus('Queued TOTP for ' + user + (res && res.action_id ? ' ('+res.action_id+')' : ''));
+        softReload(900);
+      })
+      .fail(function(xhr){ setStatus('Failed TOTP for ' + user + ': ' + (xhr.responseText || xhr.status)); $btn.prop('disabled', false).text('Delete TOTP'); });
+  });
+
+  // Single-row: Delete WebAuthn (all)
+  $(document).on('click', '.btn-del-web', function(){
+    var user = $(this).data('user');
+    var $btn = $(this);
+    $btn.prop('disabled', true).text('Queuing…');
+    setStatus('Queuing WebAuthn delete for ' + user + '…');
+    postOne({op:'webauthn.delete', user:user, scope:'all', csrf:CSRF})
+      .done(function(res){
+        setStatus('Queued WebAuthn for ' + user + (res && res.action_id ? ' ('+res.action_id+')' : ''));
+        softReload(900);
+      })
+      .fail(function(xhr){ setStatus('Failed WebAuthn for ' + user + ': ' + (xhr.responseText || xhr.status)); $btn.prop('disabled', false).text('Delete WebAuthn (all)'); });
+  });
+
+  // Single-row: Delete BOTH (TOTP then WebAuthn)
+  $(document).on('click', '.btn-delete-both', function(){
+    var user = $(this).data('user');
+    var $btn = $(this);
+    $btn.prop('disabled', true).text('Queuing…');
+    setStatus('Queuing BOTH for ' + user + '…');
+    postOne({op:'totp.delete', user:user, csrf:CSRF})
+      .always(function(){ return postOne({op:'webauthn.delete', user:user, scope:'all', csrf:CSRF}); })
+      .done(function(res){ setStatus('Queued BOTH for ' + user + (res && res.action_id ? ' ('+res.action_id+')' : '')); softReload(900); })
+      .fail(function(xhr){ setStatus('Failed BOTH for ' + user + ': ' + (xhr.responseText || xhr.status)); $btn.prop('disabled', false).text('Delete TOTP + WebAuthn'); });
+  });
 
   // master checkboxes
   $('#chk_all_totp').on('change', function(){
@@ -270,44 +305,29 @@ render_submenu();
     $('tr[data-kind="web"] .chk_one').prop('checked', this.checked);
   });
 
-  // delete BOTH (TOTP + WebAuthn) for a row
-  $('.btn-delete-both').on('click', function(){
-    var user = $(this).data('user');
-    var $status = $('#bulk_status');
-    $status.text('Queuing deletes for ' + user + '…');
-
-    // Queue TOTP then WebAuthn
-    postOne({op:'totp.delete', user:user, csrf:CSRF})
-      .always(function(){
-        return postOne({op:'webauthn.delete', user:user, scope:'all', csrf:CSRF});
-      })
-      .done(function(){ $status.text('Queued BOTH for ' + user); })
-      .fail(function(xhr){ $status.text('Failed queue for ' + user + ': ' + (xhr.responseText || xhr.status)); });
-  });
-
-  // bulk delete selected
+  // bulk delete selected (AJAX + auto-reload)
   $('#bulk_delete_selected').on('click', function(){
     var picked = $('tr[data-kind]').has('input.chk_one:checked');
     var list = [];
     picked.each(function(){
       var $tr = $(this);
       var user = $tr.data('user');
-      var kind = $tr.data('kind'); // 'totp' or 'web'
+      var kind = $tr.data('kind');
       if (kind === 'totp') list.push({op:'totp.delete', user:user});
       if (kind === 'web')  list.push({op:'webauthn.delete', user:user, scope:'all'});
     });
-    if (!list.length) return;
+    if (!list.length) { setStatus('Nothing selected.'); return; }
 
-    var $status = $('#bulk_status');
-    $status.text('Queuing ' + list.length + ' action(s)…');
+    var ok=0, fail=0;
+    setStatus('Queuing ' + list.length + ' action(s)…');
 
     (async function run(){
-      var ok=0, fail=0;
       for (const p of list) {
         try { await postOne(Object.assign({csrf: CSRF}, p)); ok++; }
         catch(e){ fail++; }
       }
-      $status.text('Queued: ' + ok + ', failed: ' + fail);
+      setStatus('Queued: ' + ok + ', failed: ' + fail);
+      softReload(900);
     })();
   });
 
