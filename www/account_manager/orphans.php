@@ -10,6 +10,11 @@ require_once "apprise_helpers.inc.php";
 @session_start();
 set_page_access('admin');
 
+// ====== TUNABLES =============================================================
+// We consider a subject "NOT orphan" only if it matches an LDAP UID (case-insensitive).
+// Emails are intentionally ignored here to avoid hiding real orphans.
+$MATCH_BY_UID_ONLY = true;
+
 // CSRF token (harmless if authelia.php ignores it; future-proof)
 if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
 $CSRF = $_SESSION['csrf'];
@@ -20,40 +25,35 @@ $AUTHELIA_DIR = getenv('AUTHELIA_DIR')
 $STATUS = $AUTHELIA_DIR . '/status.json';
 $API    = $THIS_MODULE_PATH . '/authelia.php';
 
-// Options
-$PLUS_ALIAS_NORMALIZATION = true;
-
 // Helpers
 function h(?string $s): string {
   return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
-function strip_plus_tag(string $email): string {
-  if (strpos($email, '+') === false) return $email;
-  return preg_replace('/^([^+@]+)\+[^@]+(@.+)$/', '$1$2', $email) ?: $email;
-}
 
+// ----------------------------------------------------------------------------
 // Load snapshot
 $status = ['generated_ts'=>0,'totp'=>[],'webauthn'=>[]];
-if (is_file($STATUS)) {
+$STATUS_EXISTS = is_file($STATUS);
+$STATUS_BYTES  = $STATUS_EXISTS ? (int)@filesize($STATUS) : 0;
+
+if ($STATUS_EXISTS) {
   $raw = @file_get_contents($STATUS);
   if ($raw !== false) {
     $j = json_decode($raw, true);
     if (is_array($j)) $status = $j;
   }
 }
-$gen = (int)($status['generated_ts'] ?? 0);
+$gen  = (int)($status['generated_ts'] ?? 0);
 $totp = is_array($status['totp'] ?? null) ? $status['totp'] : [];
 $web  = is_array($status['webauthn'] ?? null) ? $status['webauthn'] : [];
 
 // LDAP valid sets
-$ldap = open_ldap_connection();
+$ldap   = open_ldap_connection();
 $people = ldap_get_user_list($ldap);
-$uidsLC = []; $emailsLC = [];
+
+$uidsLC = []; // lower(uid) => canonical uid
 foreach ($people as $uid => $attribs) {
   $uidsLC[strtolower($uid)] = $uid;
-  $mail = '';
-  if (isset($attribs['mail'])) $mail = is_array($attribs['mail']) ? ($attribs['mail'][0] ?? '') : $attribs['mail'];
-  if ($mail) $emailsLC[strtolower($mail)] = $uid;
 }
 
 // Build orphan lists
@@ -61,14 +61,13 @@ $orphTOTP = [];      // [subject]
 $orphWeb  = [];      // [subject => count]
 $subjects = [];      // unique set of orphan subjects
 
-$resolveNotOrphan = function(string $subject) use ($uidsLC, $emailsLC, $PLUS_ALIAS_NORMALIZATION): bool {
+$resolveNotOrphan = function(string $subject) use ($uidsLC, $MATCH_BY_UID_ONLY): bool {
   $sl = strtolower(trim($subject));
-  if (isset($uidsLC[$sl])) return true;
-  if (strpos($sl, '@') !== false) {
-    $key = $PLUS_ALIAS_NORMALIZATION ? strtolower(strip_plus_tag($subject)) : $sl;
-    if (isset($emailsLC[$sl]) || isset($emailsLC[$key])) return true;
+  if ($MATCH_BY_UID_ONLY) {
+    return isset($uidsLC[$sl]); // UID match only
   }
-  return false;
+  // (kept for future extension if you ever want to toggle email logic again)
+  return isset($uidsLC[$sl]);
 };
 
 foreach ($totp as $subj => $present) {
@@ -79,35 +78,48 @@ foreach ($totp as $subj => $present) {
   }
 }
 foreach ($web as $subj => $count) {
-  if ((int)$count <= 0) continue;
+  // accept any "has devices" truthiness: int>0, or array with count key
+  $has = is_array($count) ? (int)($count['count'] ?? 1) > 0 : ((int)$count > 0);
+  if (!$has) continue;
   if (!$resolveNotOrphan((string)$subj)) {
-    $orphWeb[(string)$subj] = (int)$count;
+    $orphWeb[(string)$subj] = is_array($count) ? (int)($count['count'] ?? 1) : (int)$count;
+    if ($orphWeb[(string)$subj] <= 0) $orphWeb[(string)$subj] = 1; // at least one
     $subjects[(string)$subj] = true;
   }
 }
 
 $totalSubjects = count($subjects);
 
+// ----------------------------------------------------------------------------
 // Render
 render_header("$ORGANISATION_NAME account manager");
 render_submenu();
 ?>
 <style>
+/* ---- higher-contrast dark UI, Bootstrap 3 friendly ---- */
 .wrap-narrow { max-width: 1100px; margin: 18px auto 32px; }
-.panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
-.panel-modern .panel-heading { background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); color:#cfe9ff; font-weight:600; letter-spacing:.4px; text-transform:uppercase; padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.08); }
+.panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.10); border-radius:12px; overflow:hidden; }
+.panel-modern .panel-heading {
+  background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
+  color:#e4f3ff; font-weight:600; letter-spacing:.4px; text-transform:uppercase;
+  padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.12);
+}
 .panel-modern .panel-title { margin:0; font-size:16px; letter-spacing:.3px; }
 .panel-modern .panel-body { padding:16px 16px 18px; }
-.help-min { color:#8aa0b2; font-size:12px; margin-top:6px; }
-.badge-soft { background:#15202b; color:#9ad1ff; border:1px solid rgba(255,255,255,.12); border-radius:999px; padding:2px 8px; font-weight:600; }
-.table-modern > thead > tr > th { border-color:rgba(255,255,255,.08); color:#a9c4da; font-weight:600; }
-.table-modern > tbody > tr > td { border-color:rgba(255,255,255,.06); color:#cfe9ff; vertical-align:middle; }
-.table-modern > tbody > tr:hover { background:#0f151c; }
+.help-min { color:#9bb1c7; font-size:12px; margin-top:6px; }
+.badge-soft { background:#0e1a28; color:#e4f3ff; border:1px solid rgba(255,255,255,.18); border-radius:999px; padding:2px 8px; font-weight:700; }
+.table-modern > thead > tr > th { border-color:rgba(255,255,255,.14); color:#c7dbef; font-weight:700; }
+.table-modern > tbody > tr > td { border-color:rgba(255,255,255,.10); color:#e9f3ff; vertical-align:middle; }
+.table-modern > tbody > tr:hover { background:#101722; }
 .btn-pill { border-radius:999px; }
-.btn-soft { background:#121820; border:1px solid rgba(255,255,255,.12); color:#cfe9ff; }
+.btn-soft { background:#121820; border:1px solid rgba(255,255,255,.18); color:#d9ecff; }
 .btn-soft:hover { background:#17202b; }
-.kv { color:#9fb6c9; font-size:12px; margin-top:8px; }
-.kv code { color:#cfe9ff; }
+.kv { color:#c7dbef; font-size:13px; margin-top:8px; }
+.kv code { background:#0c1422; color:#e9f3ff; padding:2px 6px; border-radius:6px; border:1px solid rgba(255,255,255,.12); }
+
+/* snapshot banner for status.json visibility */
+.snap-hint { margin:10px 0 0; font-size:12px; color:#9bb1c7; }
+.snap-hint .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.18); background:#0e1a28; color:#e4f3ff; }
 </style>
 
 <div class="container wrap-narrow">
@@ -122,6 +134,10 @@ render_submenu();
         </h3>
         <div class="kv">
           Snapshot: <code><?php echo $gen ? h(date('Y-m-d H:i:s T',$gen)) : 'unknown'; ?></code>
+          <div class="snap-hint">
+            status.json: <span class="pill"><?php echo $STATUS_EXISTS ? 'present' : 'missing'; ?></span>
+            <?php if ($STATUS_EXISTS): ?> • size: <span class="pill"><?php echo (int)$STATUS_BYTES; ?> bytes</span><?php endif; ?>
+          </div>
         </div>
       </div>
       <div class="pull-right">
@@ -132,6 +148,12 @@ render_submenu();
     </div>
 
     <div class="panel-body">
+      <?php if (!$STATUS_EXISTS): ?>
+        <div class="alert alert-warning" role="alert" style="margin:0 0 10px;">
+          Couldn’t find <code><?php echo h($STATUS); ?></code>. The worker generates this file.
+        </div>
+      <?php endif; ?>
+
       <?php if ($totalSubjects === 0): ?>
         <div class="alert alert-success" role="alert" style="margin:0;">
           No MFA orphans detected. 🎉
@@ -238,8 +260,7 @@ render_submenu();
 
   // bulk delete selected
   $('#bulk_delete_selected').on('click', function(){
-    var rows = $('#orphans tbody tr').length ? $('#orphans tbody tr') : $('tr[data-kind]');
-    var picked = rows.has('input.chk_one:checked');
+    var picked = $('tr[data-kind]').has('input.chk_one:checked');
     var list = [];
     picked.each(function(){
       var $tr = $(this);
@@ -260,14 +281,6 @@ render_submenu();
         catch(e){ fail++; }
       }
       $status.text('Queued: ' + ok + ', failed: ' + fail);
-      <?php
-      // tiny admin-facing Apprise (bulk queued)
-      $host = $_SERVER['HTTP_HOST'] ?? php_uname('n') ?? 'host';
-      $admin = $GLOBALS['USER_ID'] ?? ($_SESSION['user_id'] ?? 'unknown');
-      $appriseBody = '🧹 `' . h($host) . '` **MFA Orphans bulk queued** by <code>' . h($admin) . '</code>';
-      ?>
-      // fire-and-forget via img beacon to avoid CORS; backend uses curl anyway
-      (new Image()).src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
     })();
   });
 
