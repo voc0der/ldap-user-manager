@@ -177,7 +177,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') out(['ok'=>false,'error'=>'method'], 
 
 $op   = $_POST['op']   ?? '';
 $user = $_POST['user'] ?? '';
-if (!preg_match('/^[A-Za-z0-9._-]{1,64}$/', $user)) out(['ok'=>false,'error'=>'bad user'], 400);
+if (!preg_match('/^[A-Za-z0-9._@+-]{1,128}$/', $user)) out(['ok'=>false,'error'=>'bad user'], 400);
 if (!in_array($op, ['totp.delete','webauthn.delete'], true)) out(['ok'=>false,'error'=>'bad op'], 400);
 
 $target = null;
