@@ -1,14 +1,21 @@
 <?php
+
+/**
+ * Supplementary helpers + submenu renderer for Account Manager.
+ * - Adds an "MFA Orphans" tab only when orphans exist (based on authelia/status.json).
+ * - Keeps Bootstrap 3 markup you already use elsewhere.
+ */
+
 function _am_authelia_status_path(): string {
-  // Resolve like your authelia.php does, but relative to account_manager/
+  // Resolve like account_manager/authelia.php does (relative to this file)
   $AUTHELIA_DIR = getenv('AUTHELIA_DIR')
     ?: (realpath(__DIR__ . '/../data/authelia') ?: (__DIR__ . '/../data/authelia'));
   return $AUTHELIA_DIR . '/status.json';
 }
 
 /**
- * Returns array: ['subjects' => int, 'totp' => int, 'web' => int]
- * Counts “subjects” as unique login strings that do not map to a valid LDAP uid/mail.
+ * Count MFA orphans from status.json against current LDAP users.
+ * Returns: ['subjects' => int, 'totp' => int, 'web' => int]
  */
 function get_mfa_orphan_counts(): array {
   $STATUS = _am_authelia_status_path();
@@ -22,7 +29,7 @@ function get_mfa_orphan_counts(): array {
   $totp = is_array($j['totp'] ?? null) ? $j['totp'] : [];
   $web  = is_array($j['webauthn'] ?? null) ? $j['webauthn'] : [];
 
-  // LDAP valid sets
+  // Build valid LDAP uid + email sets
   if (!function_exists('open_ldap_connection')) {
     @include_once "ldap_functions.inc.php";
   }
@@ -82,10 +89,9 @@ function render_submenu() {
     'groups' => 'groups.php'
   );
 
-  // 🔎 If orphans exist, expose the tab
+  // If orphans exist, expose the tab
   $oc = get_mfa_orphan_counts();
   if (($oc['subjects'] ?? 0) > 0) {
-    // Keep label consistent, but show a mini badge
     $submodules['mfa_orphans'] = 'orphans.php';
   }
   ?>
