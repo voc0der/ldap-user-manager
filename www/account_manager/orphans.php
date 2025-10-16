@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * MFA Orphans (TOTP + WebAuthn)
+ * - Reads status.json
+ * - Compares subjects to LDAP UIDs (case-insensitive)
+ * - Lets you queue deletes via authelia_api.php (one, both, bulk, all)
+ */
+
 set_include_path(".:" . __DIR__ . "/../includes/");
 require_once "web_functions.inc.php";
 require_once "ldap_functions.inc.php";
@@ -11,23 +18,31 @@ require_once "apprise_helpers.inc.php";
 set_page_access('admin');
 
 // ====== TUNABLES =============================================================
-// We consider a subject "NOT orphan" only if it matches an LDAP UID (case-insensitive).
-// Emails are intentionally ignored here to avoid hiding real orphans.
-$MATCH_BY_UID_ONLY = true;
+$MATCH_BY_UID_ONLY = true; // treat subject as orphan unless it matches an LDAP uid
 
-// CSRF token (harmless if authelia.php ignores it; future-proof)
+// CSRF token (harmless if API ignores; future-proof)
 if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
 $CSRF = $_SESSION['csrf'];
 
-// Resolve Authelia paths (like authelia.php)
+// Resolve Authelia paths
 $AUTHELIA_DIR = getenv('AUTHELIA_DIR')
   ?: (realpath(__DIR__ . '/../data/authelia') ?: (__DIR__ . '/../data/authelia'));
 $STATUS = $AUTHELIA_DIR . '/status.json';
-$API    = $THIS_MODULE_PATH . '/authelia.php';
+
+// API endpoint (correct path)
+$API    = $THIS_MODULE_PATH . '/authelia_api.php';
 
 // Helpers
 function h(?string $s): string {
   return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+function human_time_diff($now, $ts) {
+  $diff = abs($now - $ts);
+  $units = [31536000=>'year',2592000=>'month',604800=>'week',86400=>'day',3600=>'hour',60=>'minute',1=>'second'];
+  foreach ($units as $secs=>$name) {
+    if ($diff >= $secs) { $v = (int)floor($diff/$secs); return $v.' '.$name.($v>1?'s':''); }
+  }
+  return '0 seconds';
 }
 
 // ----------------------------------------------------------------------------
@@ -47,10 +62,9 @@ $gen  = (int)($status['generated_ts'] ?? 0);
 $totp = is_array($status['totp'] ?? null) ? $status['totp'] : [];
 $web  = is_array($status['webauthn'] ?? null) ? $status['webauthn'] : [];
 
-// LDAP valid sets
+// LDAP valid UIDs
 $ldap   = open_ldap_connection();
 $people = ldap_get_user_list($ldap);
-
 $uidsLC = []; // lower(uid) => canonical uid
 foreach ($people as $uid => $attribs) {
   $uidsLC[strtolower($uid)] = $uid;
@@ -63,10 +77,7 @@ $subjects = [];      // unique set of orphan subjects
 
 $resolveNotOrphan = function(string $subject) use ($uidsLC, $MATCH_BY_UID_ONLY): bool {
   $sl = strtolower(trim($subject));
-  if ($MATCH_BY_UID_ONLY) {
-    return isset($uidsLC[$sl]); // UID match only
-  }
-  // (kept for future extension if you ever want to toggle email logic again)
+  // UID-only logic
   return isset($uidsLC[$sl]);
 };
 
@@ -78,16 +89,14 @@ foreach ($totp as $subj => $present) {
   }
 }
 foreach ($web as $subj => $count) {
-  // accept any "has devices" truthiness: int>0, or array with count key
   $has = is_array($count) ? (int)($count['count'] ?? 1) > 0 : ((int)$count > 0);
   if (!$has) continue;
   if (!$resolveNotOrphan((string)$subj)) {
     $orphWeb[(string)$subj] = is_array($count) ? (int)($count['count'] ?? 1) : (int)$count;
-    if ($orphWeb[(string)$subj] <= 0) $orphWeb[(string)$subj] = 1; // at least one
+    if ($orphWeb[(string)$subj] <= 0) $orphWeb[(string)$subj] = 1;
     $subjects[(string)$subj] = true;
   }
 }
-
 $totalSubjects = count($subjects);
 
 // ----------------------------------------------------------------------------
@@ -116,10 +125,9 @@ render_submenu();
 .btn-soft:hover { background:#17202b; }
 .kv { color:#c7dbef; font-size:13px; margin-top:8px; }
 .kv code { background:#0c1422; color:#e9f3ff; padding:2px 6px; border-radius:6px; border:1px solid rgba(255,255,255,.12); }
-
-/* snapshot banner for status.json visibility */
 .snap-hint { margin:10px 0 0; font-size:12px; color:#9bb1c7; }
 .snap-hint .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.18); background:#0e1a28; color:#e4f3ff; }
+.inline { display:inline-block; margin:0; }
 </style>
 
 <div class="container wrap-narrow">
@@ -133,7 +141,21 @@ render_submenu();
           <span class="badge-soft" title="WebAuthn entries"><?php echo count($orphWeb); ?> WebAuthn</span>
         </h3>
         <div class="kv">
-          Snapshot: <code><?php echo $gen ? h(date('Y-m-d H:i:s T',$gen)) : 'unknown'; ?></code>
+          Snapshot:
+          <code title="UTC: <?php echo $gen ? h(gmdate('Y-m-d H:i:s \U\T\C', $gen)) : 'unknown'; ?>">
+            <?php
+              if ($gen) {
+                $dt = new DateTime("@$gen");
+                $dt->setTimezone(new DateTimeZone(date_default_timezone_get()));
+                echo h($dt->format('Y-m-d H:i:s T'));
+              } else {
+                echo 'unknown';
+              }
+            ?>
+          </code>
+          <?php if ($gen): ?>
+          <span class="help-min">(≈ <?php echo h(human_time_diff(time(), $gen)); ?> ago)</span>
+          <?php endif; ?>
           <div class="snap-hint">
             status.json: <span class="pill"><?php echo $STATUS_EXISTS ? 'present' : 'missing'; ?></span>
             <?php if ($STATUS_EXISTS): ?> • size: <span class="pill"><?php echo (int)$STATUS_BYTES; ?> bytes</span><?php endif; ?>
@@ -164,7 +186,7 @@ render_submenu();
       <h4 style="margin-top:0;">TOTP (orphaned)</h4>
       <div class="table-responsive">
         <table class="table table-striped table-modern">
-          <thead><tr><th style="width:40px"><input type="checkbox" id="chk_all_totp"></th><th>Authelia subject</th><th style="width:180px">Action</th></tr></thead>
+          <thead><tr><th style="width:40px"><input type="checkbox" id="chk_all_totp"></th><th>Authelia subject</th><th style="width:200px">Action</th></tr></thead>
           <tbody>
           <?php foreach ($orphTOTP as $subj): ?>
             <tr data-kind="totp" data-user="<?php echo h($subj); ?>">
@@ -177,6 +199,7 @@ render_submenu();
                   <input type="hidden" name="csrf" value="<?php echo h($CSRF); ?>">
                   <button type="submit" class="btn btn-xs btn-danger btn-pill">Delete TOTP</button>
                 </form>
+                <button type="button" class="btn btn-xs btn-soft btn-pill btn-delete-both" data-user="<?php echo h($subj); ?>">Delete BOTH</button>
               </td>
             </tr>
           <?php endforeach; ?>
@@ -189,7 +212,7 @@ render_submenu();
       <h4>WebAuthn (orphaned)</h4>
       <div class="table-responsive">
         <table class="table table-striped table-modern">
-          <thead><tr><th style="width:40px"><input type="checkbox" id="chk_all_web"></th><th>Authelia subject</th><th>Device count</th><th style="width:220px">Action</th></tr></thead>
+          <thead><tr><th style="width:40px"><input type="checkbox" id="chk_all_web"></th><th>Authelia subject</th><th>Device count</th><th style="width:240px">Action</th></tr></thead>
           <tbody>
           <?php foreach ($orphWeb as $subj => $cnt): ?>
             <tr data-kind="web" data-user="<?php echo h($subj); ?>">
@@ -226,9 +249,13 @@ render_submenu();
 <script>
 // basic jQuery is already present in LUM
 (function($){
+  var API = <?php echo json_encode($API); ?>;
+  var CSRF = <?php echo json_encode($CSRF); ?>;
+
   function postOne(payload) {
+    // Use AJAX (same as show_user.php does) so we can show inline status
     return $.ajax({
-      url: <?php echo json_encode($API); ?>,
+      url: API,
       type: 'POST',
       data: payload,
       dataType: 'json'
@@ -250,9 +277,9 @@ render_submenu();
     $status.text('Queuing deletes for ' + user + '…');
 
     // Queue TOTP then WebAuthn
-    postOne({op:'totp.delete', user:user, csrf:<?php echo json_encode($CSRF); ?>})
+    postOne({op:'totp.delete', user:user, csrf:CSRF})
       .always(function(){
-        return postOne({op:'webauthn.delete', user:user, scope:'all', csrf:<?php echo json_encode($CSRF); ?>});
+        return postOne({op:'webauthn.delete', user:user, scope:'all', csrf:CSRF});
       })
       .done(function(){ $status.text('Queued BOTH for ' + user); })
       .fail(function(xhr){ $status.text('Failed queue for ' + user + ': ' + (xhr.responseText || xhr.status)); });
@@ -277,7 +304,7 @@ render_submenu();
     (async function run(){
       var ok=0, fail=0;
       for (const p of list) {
-        try { await postOne(Object.assign({csrf: <?php echo json_encode($CSRF); ?>}, p)); ok++; }
+        try { await postOne(Object.assign({csrf: CSRF}, p)); ok++; }
         catch(e){ fail++; }
       }
       $status.text('Queued: ' + ok + ', failed: ' + fail);
