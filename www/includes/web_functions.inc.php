@@ -358,11 +358,14 @@ function format_module_label($module) {
 ######################################################
 
 function render_menu() {
-  // Bootstrap 3 navbar w/ hamburger + username (desktop) + mobile badge & in-menu username
+  // Bootstrap 3 navbar w/ hamburger + username (desktop) + username inside mobile menu only when expanded
   global $SITE_NAME, $MODULES, $THIS_MODULE, $VALIDATED, $IS_ADMIN, $USER_ID, $SERVER_PATH, $CUSTOM_LOGO, $MFA_SETTINGS_URL;
   global $MODULE_GROUP_GATES, $REMOTE_HTTP_HEADERS_LOGIN;
 
+  // Normalize gates map
   $MODULE_GROUP_GATES = (isset($MODULE_GROUP_GATES) && is_array($MODULE_GROUP_GATES)) ? $MODULE_GROUP_GATES : [];
+
+  // Cache user groups (lowercased) only when using header-based login
   $USER_GROUPS_LOWER = $REMOTE_HTTP_HEADERS_LOGIN ? lum_remote_groups_lower() : [];
 
   ?>
@@ -389,16 +392,6 @@ function render_menu() {
           </a>
         <?php } ?>
         <a class="navbar-brand" href="./"><?php echo $SITE_NAME; ?></a>
-
-        <!-- Mobile-only username badge on the right (only when menu is collapsed) -->
-        <?php if (!empty($USER_ID)) { ?>
-          <div class="navbar-username-xs visible-xs-block">
-            <span class="username username--glitch"
-                  data-u="<?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?>">
-              <?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?>
-            </span>
-          </div>
-        <?php } ?>
       </div>
 
       <!-- Collapsible nav -->
@@ -408,6 +401,7 @@ function render_menu() {
           foreach ($MODULES as $module => $access) {
             $name = format_module_label(stripslashes($module));
 
+            // Base visibility (existing logic)
             $show = true;
             if ($VALIDATED) {
               if ($access == 'hidden_on_login' && $access != 'always') $show = false;
@@ -416,10 +410,13 @@ function render_menu() {
               if ($access != 'hidden_on_login' && $access != 'always') $show = false;
             }
 
+            // Additional group-gating based on $MODULE_GROUP_GATES (headers mode)
             if ($show && $VALIDATED && $REMOTE_HTTP_HEADERS_LOGIN && !empty($MODULE_GROUP_GATES[$module])) {
               $needs = array_map('strtolower', (array)$MODULE_GROUP_GATES[$module]);
               $hasAny = false;
-              foreach ($needs as $g) { if (in_array($g, $USER_GROUPS_LOWER, true)) { $hasAny = true; break; } }
+              foreach ($needs as $g) {
+                if (in_array($g, $USER_GROUPS_LOWER, true)) { $hasAny = true; break; }
+              }
               if (!$hasAny && !(GROUP_GATE_ADMIN_BYPASS && $IS_ADMIN)) $show = false;
             }
 
@@ -434,7 +431,7 @@ function render_menu() {
             <li><a href="<?php echo htmlspecialchars($MFA_SETTINGS_URL, ENT_QUOTES, 'UTF-8'); ?>">MFA Settings</a></li>
           <?php } ?>
 
-          <!-- Username INSIDE the collapsed menu (mobile), shown only when menu is expanded -->
+          <!-- Username INSIDE the collapsed menu (mobile only), thus only visible when menu is expanded -->
           <?php if (!empty($USER_ID)) { ?>
             <li class="visible-xs-block user-tag-xs-menu">
               <span class="username username--glitch"
@@ -468,11 +465,11 @@ function render_menu() {
     .navbar-brand .logo { max-height:22px; display:inline-block; margin-top:-2px; }
     .navbar .user-tag { padding-right:12px; }
 
-    /* Desktop/Tablet username look */
+    /* Subtle cyberpunk username with gentle glow */
     .navbar .username {
       font-weight:500;
       letter-spacing:0.2px;
-      color:#8df7ff;
+      color:#8df7ff;                  /* toned down cyan */
       text-shadow:0 0 2px rgba(0,255,255,0.35);
       max-width:220px;
       display:inline-block;
@@ -482,13 +479,15 @@ function render_menu() {
       vertical-align:middle;
     }
 
-    /* Glitch (subtle) */
+    /* Glitch effect (very subtle, occasional) */
     .username--glitch { position:relative; isolation:isolate; }
     .username--glitch::before,
     .username--glitch::after {
       content: attr(data-u);
-      position:absolute; inset:0;
-      pointer-events:none; opacity:0;
+      position:absolute;
+      inset:0;
+      pointer-events:none;
+      opacity:0; /* visible only during flicker */
     }
     .username--glitch::before { mix-blend-mode:screen; }
     .username--glitch::after  { mix-blend-mode:screen; }
@@ -499,23 +498,16 @@ function render_menu() {
       98%             { opacity:0.45; transform:translate(0.8px,0.4px);  clip-path:inset(35% 0 0 0); }
       99%             { opacity:0.40; transform:translate(-0.4px,0.6px); clip-path:inset(0 0 30% 0); }
     }
-    .username--glitch::before { color:#00ffff; animation: glitch-flicker 6.5s infinite steps(1, end); }
-    .username--glitch::after  { color:#ff5a5a; animation: glitch-flicker 6.5s infinite steps(1, end) 80ms; }
-
-    /* Mobile badge: right, inset, non-interactive so it never blocks taps */
-    .navbar-username-xs {
-      position:absolute;
-      right:10px;
-      top:8px;
-      line-height:34px;
-      z-index:1030;
-      pointer-events:none;      /* critical: allow hamburger taps through */
+    .username--glitch::before {
+      color:#00ffff;
+      animation: glitch-flicker 6.5s infinite steps(1, end);
+    }
+    .username--glitch::after {
+      color:#ff5a5a;
+      animation: glitch-flicker 6.5s infinite steps(1, end) 80ms;
     }
 
-    /* When menu is OPEN on xs, hide the floating badge */
-    html.nav-open-xs .navbar-username-xs { display:none !important; }
-
-    /* Username inside the expanded mobile menu: right-aligned row */
+    /* Username row inside the expanded mobile menu */
     .user-tag-xs-menu {
       width:100%;
       text-align:right;
@@ -524,71 +516,41 @@ function render_menu() {
     }
 
     @media (max-width: 767px) {
-      .navbar .username { max-width:150px; }
+      .navbar .username { max-width:150px; } /* slight tighten on phones */
     }
   </style>
   <?php
-  // --- Auto-expand the navbar on mobile when we're at the LUM root path ---
+  // --- Auto-expand the navbar on mobile when we're at the LUM root path (your previous behavior) ---
   $req_path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-  $base     = rtrim($SERVER_PATH, '/');
+  $base     = rtrim($SERVER_PATH, '/');              // e.g., '/lum'
   $is_root  =
-      $req_path === '/' && ($base === '' || $base === '/')
-   || $req_path === $base
-   || $req_path === $base.'/'
-   || $req_path === $base.'/index.php';
+      $req_path === '/' && ($base === '' || $base === '/')     // site root when LUM is at '/'
+   || $req_path === $base                                      // '/lum'
+   || $req_path === $base.'/'                                  // '/lum/'
+   || $req_path === $base.'/index.php';                        // '/lum/index.php'
   ?>
   <script>
   (function () {
-    // Toggle class on <html> when the mobile menu opens/closes
-    var $nav = $('#main-navbar');
-    $nav.on('show.bs.collapse', function(){ document.documentElement.classList.add('nav-open-xs'); });
-    $nav.on('hide.bs.collapse', function(){ document.documentElement.classList.remove('nav-open-xs'); });
-
-    // If the menu starts open (rare), ensure class is synced
-    if ($nav.hasClass('in')) { document.documentElement.classList.add('nav-open-xs'); }
-
-    // Auto-open at root on phones (your original behavior), and sync state class
+    // Auto-open at root on phones (kept from your earlier requirement)
     var isRoot = <?php echo $is_root ? 'true' : 'false'; ?>;
-    function expandIfMobile() {
+    function expandIfMobileAtRoot() {
+      if (!isRoot) return;
       if (window.matchMedia && window.matchMedia('(max-width: 767px)').matches) {
         var nav = document.getElementById('main-navbar');
-        var toggle = document.querySelector('.navbar-toggle');
-        if (!nav) return;
-
-        if (nav.classList.contains('collapse') && !nav.classList.contains('in')) {
-          // Open and mark nav-open-xs so the badge hides while open
-          $(nav).collapse('show'); // triggers events so class toggles correctly
-        }
-        if (toggle) {
-          toggle.classList.remove('collapsed');
-          toggle.setAttribute('aria-expanded', 'true');
+        var $nav = window.jQuery ? jQuery(nav) : null;
+        if (!$nav) return;
+        if (!nav.classList.contains('in')) {
+          $nav.collapse('show'); // shows menu; username will be visible inside it
         }
       }
     }
-    if (isRoot) {
-      // Defer slightly so Bootstrap JS is definitely ready
-      setTimeout(expandIfMobile, 0);
-    }
-
-    // Keep the optional smart badge nudge if you like
-    function smartBadgePosition() {
-      var badge = document.querySelector('.navbar-username-xs');
-      var brand = document.querySelector('.navbar-brand');
-      if (!badge || !brand) return;
-      var isXs = window.matchMedia && window.matchMedia('(max-width: 767px)').matches;
-      if (!isXs) { badge.style.top = '8px'; return; }
-      var brandRect  = brand.getBoundingClientRect();
-      var navbarRect = (brand.closest('.navbar') || document.body).getBoundingClientRect();
-      var spaceRight = navbarRect.right - brandRect.right;
-      badge.style.top = (spaceRight < 90 ? '32px' : '8px');
-    }
-    smartBadgePosition();
-    var t;
-    window.addEventListener('resize', function(){ clearTimeout(t); t = setTimeout(smartBadgePosition, 120); });
+    // Defer to ensure Bootstrap collapse is ready
+    setTimeout(expandIfMobileAtRoot, 0);
   })();
   </script>
   <?php
 }
+
 
 ######################################################
 
