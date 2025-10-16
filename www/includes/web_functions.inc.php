@@ -519,7 +519,6 @@ function render_menu() {
       .navbar .username { max-width:150px; } /* slight tighten on phones */
     }
 
-    /* === NEW: Make navbar links & username text unselectable (clicks still work) === */
     .navbar .nav > li > a,
     .navbar .navbar-brand,
     .navbar .navbar-text,
