@@ -407,22 +407,80 @@ document.addEventListener('DOMContentLoaded', function(){
 </script>
 
 <script type="text/javascript">
-// enable/disable "Email these credentials" based on visible email input
-document.addEventListener('DOMContentLoaded', function () {
-  var emailInput = document.getElementById('mail');
-  var sendBox    = document.getElementById('send_email_checkbox');
-  if (!emailInput || !sendBox) return;
-
-  function looksLikeEmail(v){
+// Robustly enable/disable "Email these credentials" based on the visible email value.
+// Handles programmatic updates from generators (UID->mail, name->mail, etc.).
+(function () {
+  function looksLikeEmail(v) {
     v = (v || '').trim();
     return v.length > 3 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v);
   }
+
   function refreshCheckbox() {
+    var emailInput = document.getElementById('mail');
+    var sendBox    = document.getElementById('send_email_checkbox');
+    if (!emailInput || !sendBox) return;
     sendBox.disabled = !looksLikeEmail(emailInput.value);
   }
-  emailInput.addEventListener('input', refreshCheckbox);
-  refreshCheckbox();
-});
+
+  // If scripts set mail.value directly, dispatch events so our listeners run.
+  function hookMailValueSetter() {
+    var emailInput = document.getElementById('mail');
+    if (!emailInput) return;
+
+    // Use the HTMLInputElement prototype descriptor
+    var desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    if (!desc || !desc.set) return; // safety
+
+    var origSet = desc.set;
+    var origGet = desc.get;
+
+    try {
+      Object.defineProperty(emailInput, 'value', {
+        configurable: true,
+        enumerable: desc.enumerable,
+        get: function () {
+          return origGet ? origGet.call(emailInput) : emailInput.getAttribute('value') || '';
+        },
+        set: function (val) {
+          origSet.call(emailInput, val);
+          // notify anyone watching (including us)
+          emailInput.dispatchEvent(new Event('input',  { bubbles: true }));
+          emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+    } catch (e) {
+      // If redefining the property fails in this environment, that's fine; we still have other fallbacks.
+    }
+  }
+
+  function wire() {
+    var emailInput = document.getElementById('mail');
+    var uid        = document.getElementById('uid');
+    var given      = document.getElementById('givenname');
+    var sn         = document.getElementById('sn');
+
+    // Any time these fields change, re-check the email value
+    [emailInput, uid, given, sn].forEach(function (el) {
+      if (!el) return;
+      el.addEventListener('input',  function () { setTimeout(refreshCheckbox, 0); });
+      el.addEventListener('change', refreshCheckbox);
+      el.addEventListener('blur',   refreshCheckbox);
+    });
+
+    hookMailValueSetter();
+
+    // Initial + delayed passes (catch async generators)
+    refreshCheckbox();
+    setTimeout(refreshCheckbox, 200);
+    setTimeout(refreshCheckbox, 700);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire);
+  } else {
+    wire();
+  }
+})();
 </script>
 
 <style>
