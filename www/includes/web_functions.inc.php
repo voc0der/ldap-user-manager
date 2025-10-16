@@ -358,9 +358,9 @@ function format_module_label($module) {
 ######################################################
 
 function render_menu() {
-  // Bootstrap 3 navbar w/ hamburger + simple username label (no dropdown)
+  // Bootstrap 3 navbar w/ hamburger + username (desktop) + mobile badge
   global $SITE_NAME, $MODULES, $THIS_MODULE, $VALIDATED, $IS_ADMIN, $USER_ID, $SERVER_PATH, $CUSTOM_LOGO, $MFA_SETTINGS_URL;
-  // New: access to gating map + header-mode flag
+  // Access to gating map + header-mode flag
   global $MODULE_GROUP_GATES, $REMOTE_HTTP_HEADERS_LOGIN;
 
   // Normalize gates map
@@ -393,6 +393,16 @@ function render_menu() {
           </a>
         <?php } ?>
         <a class="navbar-brand" href="./"><?php echo $SITE_NAME; ?></a>
+
+        <!-- Mobile-only username badge on the right (not inside the collapsed list) -->
+        <?php if (!empty($USER_ID)) { ?>
+          <div class="navbar-username-xs visible-xs-block">
+            <span class="username username--glitch"
+                  data-u="<?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?>">
+              <?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?>
+            </span>
+          </div>
+        <?php } ?>
       </div>
 
       <!-- Collapsible nav -->
@@ -431,18 +441,19 @@ function render_menu() {
           }
           ?>
 
-           <?php if (!empty($MFA_SETTINGS_URL) && $VALIDATED) { ?>
-             <li>
-               <a href="<?php echo htmlspecialchars($MFA_SETTINGS_URL, ENT_QUOTES, 'UTF-8'); ?>">MFA Settings</a>
-             </li>
-           <?php } ?>
+          <?php if (!empty($MFA_SETTINGS_URL) && $VALIDATED) { ?>
+            <li>
+              <a href="<?php echo htmlspecialchars($MFA_SETTINGS_URL, ENT_QUOTES, 'UTF-8'); ?>">MFA Settings</a>
+            </li>
+          <?php } ?>
         </ul>
 
-        <!-- Right side: just the username (no dropdown, no icon) -->
-        <ul class="nav navbar-nav navbar-right">
+        <!-- Right side: username (desktop/tablet only) -->
+        <ul class="nav navbar-nav navbar-right hidden-xs">
           <?php if (!empty($USER_ID)) { ?>
             <li class="navbar-text user-tag">
-              <span class="username">
+              <span class="username username--glitch"
+                    data-u="<?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?>">
                 <?php echo htmlspecialchars($USER_ID, ENT_QUOTES, 'UTF-8'); ?>
               </span>
             </li>
@@ -452,25 +463,72 @@ function render_menu() {
     </div>
   </nav>
 
-  <!-- small navbar tweaks -->
+  <!-- small navbar tweaks + toned-down glitch -->
   <style>
+    /* Make container positioned so the mobile badge can sit absolute-right */
+    .navbar > .container,
+    .navbar > .container-fluid { position: relative; }
+
     .navbar-brand .logo { max-height:22px; display:inline-block; margin-top:-2px; }
     .navbar .user-tag { padding-right:12px; }
+
+    /* Subtle cyberpunk username with gentle glow */
     .navbar .username {
-      color:#00ffee;
-      text-shadow:0 0 5px #00ffee, 0 0 10px #00ffee;
-      max-width:180px;
+      font-weight:500;
+      letter-spacing:0.2px;
+      color:#8df7ff;                  /* toned down cyan */
+      text-shadow:0 0 2px rgba(0,255,255,0.35);
+      max-width:220px;
       display:inline-block;
       white-space:nowrap;
       overflow:hidden;
       text-overflow:ellipsis;
       vertical-align:middle;
     }
+
+    /* Glitch effect (very subtle, occasional) */
+    .username--glitch { position:relative; isolation:isolate; }
+    .username--glitch::before,
+    .username--glitch::after {
+      content: attr(data-u);
+      position:absolute;
+      inset:0;
+      pointer-events:none;
+      opacity:0; /* visible only during flicker */
+    }
+    .username--glitch::before { mix-blend-mode:screen; }
+    .username--glitch::after  { mix-blend-mode:screen; }
+
+    @keyframes glitch-flicker {
+      0%, 96%, 100%   { opacity:0; transform:translate(0,0); clip-path:inset(0 0 0 0); }
+      97%             { opacity:0.55; transform:translate(-0.6px,-0.2px); clip-path:inset(0 0 60% 0); }
+      98%             { opacity:0.45; transform:translate(0.8px,0.4px);  clip-path:inset(35% 0 0 0); }
+      99%             { opacity:0.40; transform:translate(-0.4px,0.6px); clip-path:inset(0 0 30% 0); }
+    }
+    .username--glitch::before {
+      color:#00ffff;
+      animation: glitch-flicker 6.5s infinite steps(1, end);
+    }
+    .username--glitch::after {
+      color:#ff5a5a;
+      animation: glitch-flicker 6.5s infinite steps(1, end) 80ms;
+    }
+
+    /* Mobile badge pinned to the right, slightly inset from the edge */
+    .navbar-username-xs {
+      position:absolute;
+      right:10px;         /* a little off the edge, not on the gutter */
+      top:8px;            /* visually centers with brand line height */
+      line-height:34px;   /* harmonizes with toggle/brand line */
+      z-index:1030;       /* above collapse but below modals */
+    }
+
+    /* Slightly narrower on phones so it doesn’t crowd */
     @media (max-width: 767px) {
-      .navbar .username { max-width:120px; } /* keep it from wrapping on phones */
+      .navbar .username { max-width:150px; }
     }
   </style>
-   <?php
+  <?php
   // --- Auto-expand the navbar on mobile when we're at the LUM root path ---
   // Figure out if the current request is the base "blank" page.
   $req_path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
@@ -480,40 +538,69 @@ function render_menu() {
    || $req_path === $base                                      // '/lum'
    || $req_path === $base.'/'                                  // '/lum/'
    || $req_path === $base.'/index.php';                        // '/lum/index.php'
-?>
-<script>
-(function () {
-  var isRoot = <?php echo $is_root ? 'true' : 'false'; ?>;
-  if (!isRoot) return;
+  ?>
+  <script>
+  (function () {
+    var isRoot = <?php echo $is_root ? 'true' : 'false'; ?>;
+    if (!isRoot) return;
 
-  function expandIfMobile() {
-    // Bootstrap "xs" breakpoint for BS3
-    if (window.matchMedia && window.matchMedia('(max-width: 767px)').matches) {
-      var nav = document.getElementById('main-navbar');
-      var toggle = document.querySelector('.navbar-toggle');
-      if (!nav) return;
+    function expandIfMobile() {
+      // Bootstrap "xs" breakpoint for BS3
+      if (window.matchMedia && window.matchMedia('(max-width: 767px)').matches) {
+        var nav = document.getElementById('main-navbar');
+        var toggle = document.querySelector('.navbar-toggle');
+        if (!nav) return;
 
-      // Make the collapsed menu visible/expanded
-      if (nav.classList.contains('collapse') && !nav.classList.contains('in')) {
-        nav.classList.add('in');
-        nav.style.height = 'auto';
-      }
-      if (toggle) {
-        toggle.classList.remove('collapsed');
-        toggle.setAttribute('aria-expanded', 'true');
+        // Make the collapsed menu visible/expanded
+        if (nav.classList.contains('collapse') && !nav.classList.contains('in')) {
+          nav.classList.add('in');
+          nav.style.height = 'auto';
+        }
+        if (toggle) {
+          toggle.classList.remove('collapsed');
+          toggle.setAttribute('aria-expanded', 'true');
+        }
       }
     }
-  }
 
-  // Run immediately (page load) and on resize (debounced)
-  expandIfMobile();
-  var t;
-  window.addEventListener('resize', function () {
-    clearTimeout(t);
-    t = setTimeout(expandIfMobile, 120);
-  });
-})();
-</script>
+    // Run immediately (page load) and on resize (debounced)
+    expandIfMobile();
+    var t;
+    window.addEventListener('resize', function () {
+      clearTimeout(t);
+      t = setTimeout(expandIfMobile, 120);
+    });
+  })();
+  </script>
+
+  <!-- Optional: nudge mobile badge lower if brand is very long -->
+  <script>
+  (function () {
+    function smartBadgePosition() {
+      var badge = document.querySelector('.navbar-username-xs');
+      var brand = document.querySelector('.navbar-brand');
+      if (!badge || !brand) return;
+
+      // Only on phones
+      var isXs = window.matchMedia && window.matchMedia('(max-width: 767px)').matches;
+      if (!isXs) { badge.style.top = '8px'; return; }
+
+      var brandRect  = brand.getBoundingClientRect();
+      var navbarRect = (brand.closest('.navbar') || document.body).getBoundingClientRect();
+      var spaceRight = navbarRect.right - brandRect.right;
+
+      // If brand gets too close to the right edge, drop the badge slightly
+      badge.style.top = (spaceRight < 90 ? '32px' : '8px');
+    }
+
+    smartBadgePosition();
+    var u;
+    window.addEventListener('resize', function () {
+      clearTimeout(u);
+      u = setTimeout(smartBadgePosition, 120);
+    });
+  })();
+  </script>
   <?php
 }
 
