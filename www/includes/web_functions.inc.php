@@ -518,6 +518,17 @@ function render_menu() {
     @media (max-width: 767px) {
       .navbar .username { max-width:150px; } /* slight tighten on phones */
     }
+
+    /* === NEW: Make navbar links & username text unselectable (clicks still work) === */
+    .navbar .nav > li > a,
+    .navbar .navbar-brand,
+    .navbar .navbar-text,
+    .navbar .username {
+       -webkit-user-select: none; /* Safari/Chrome/iOS */
+       -moz-user-select: none;    /* Firefox */
+       -ms-user-select: none;     /* old Edge/IE */
+       user-select: none;         /* Standard */
+    }
   </style>
   <?php
   // --- Auto-expand the navbar on mobile when we're at the LUM root path (your previous behavior) ---
