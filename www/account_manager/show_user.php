@@ -1,5 +1,5 @@
 <?php
-// www/account_manager/show_user.php  (modernized styling + Authelia MFA inline resets)
+// www/account_manager/show_user.php  (modernized styling + Authelia MFA inline resets, avatar endpoint)
 
 declare(strict_types=1);
 
@@ -8,7 +8,56 @@ set_include_path(".:" . __DIR__ . "/../includes/");
 include_once "web_functions.inc.php";
 include_once "ldap_functions.inc.php";
 include_once "module_functions.inc.php";
-set_page_access("admin");
+set_page_access("admin"); // keep gating for both HTML and avatar endpoint
+
+// ---- Early avatar endpoint (same file) ---------------------------------------
+if (isset($_GET['avatar'])) {
+  // Minimal helpers (avoid any prior output!)
+  header('X-Content-Type-Options: nosniff');
+
+  // Resolve account_identifier from GET (required)
+  $account_identifier = $_GET['account_identifier'] ?? '';
+  if ($account_identifier === '') { http_response_code(400); exit; }
+
+  // Open LDAP and fetch photo attributes
+  $ldap_connection = open_ldap_connection();
+  $uidAttr = $LDAP['account_attribute'];
+  $filter  = "({$uidAttr}=" . ldap_escape($account_identifier, "", LDAP_ESCAPE_FILTER) . ")";
+  $attrs   = ['jpegPhoto','thumbnailPhoto','photo'];
+  $sr      = @ldap_search($ldap_connection, $LDAP['user_dn'], $filter, $attrs);
+
+  if (!$sr) { http_response_code(500); exit; }
+  $e = @ldap_get_entries($ldap_connection, $sr);
+  if (!is_array($e) || ($e['count'] ?? 0) < 1) { http_response_code(404); exit; }
+
+  $entry = $e[0];
+  // LDAP array keys are lower-cased by PHP
+  $photo = $entry['jpegphoto'][0] ?? ($entry['thumbnailphoto'][0] ?? ($entry['photo'][0] ?? null));
+  if (!$photo) { http_response_code(404); exit; }
+
+  // Detect MIME (fallback to image/jpeg)
+  $mime = 'image/jpeg';
+  if (function_exists('finfo_open')) {
+    $fi = finfo_open(FILEINFO_MIME_TYPE);
+    if ($fi) {
+      $det = @finfo_buffer($fi, $photo);
+      finfo_close($fi);
+      if (is_string($det) && strpos($det, 'image/') === 0) $mime = $det;
+    }
+  }
+
+  $etag = '"' . sha1($photo) . '"';
+  header('Cache-Control: private, max-age=300');
+  header('ETag: ' . $etag);
+  if (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) {
+    http_response_code(304); exit;
+  }
+
+  header('Content-Type: ' . $mime);
+  header('Content-Length: ' . strlen($photo));
+  echo $photo;
+  exit;
+}
 
 // ---- Password Policy (global) ----
 const DEFAULT_MIN_LEN = 12;
@@ -40,6 +89,8 @@ if (isset($LDAP['account_additional_attributes'])) {
 if (!array_key_exists($LDAP['account_attribute'], $attribute_map)) {
   $attribute_r = array_merge($attribute_map, array($LDAP['account_attribute'] => array("label" => "Account UID")));
 }
+
+$SELF = htmlentities($_SERVER['PHP_SELF']);
 
 if (!isset($_POST['account_identifier']) && !isset($_GET['account_identifier'])) { ?>
   <div class="alert alert-danger">
@@ -344,12 +395,20 @@ document.addEventListener('DOMContentLoaded', updateMeter);
 .panel-title h3 { margin:0; font-size:18px; letter-spacing:.2px; }
 .invisible { visibility:hidden; } .visible { visibility:visible; }
 .right_button { width: 200px; float: right; }
+.avatar {
+  width:40px;height:40px;border-radius:50%;object-fit:cover;margin-right:10px;vertical-align:middle;border:1px solid rgba(255,255,255,.18);
+}
 </style>
 
 <div class="container wrap-narrow">
   <div class="panel panel-modern">
     <div class="panel-heading clearfix">
-      <div class="pull-left"><span class="panel-title"><h3><?php print $account_identifier; ?></h3></span></div>
+      <div class="pull-left">
+        <img class="avatar" alt="Avatar"
+             src="<?php echo $SELF; ?>?avatar=1&account_identifier=<?php echo urlencode($account_identifier); ?>&t=<?php echo (int)$status_ts; ?>"
+             onerror="this.style.display='none'">
+        <span class="panel-title"><h3 style="display:inline-block;vertical-align:middle;margin:0;"><?php print $account_identifier; ?></h3></span>
+      </div>
       <div class="pull-right">
         <button class="btn btn-warning btn-pill" onclick="show_delete_user_button();" <?php if ($account_identifier == $USER_ID) { print "disabled"; }?>>Delete account</button>
         <form action="<?php print "{$THIS_MODULE_PATH}"; ?>/index.php" method="post" style="display:inline;">
@@ -369,13 +428,32 @@ document.addEventListener('DOMContentLoaded', updateMeter);
         <input type="hidden" name="account_identifier" value="<?php print $account_identifier; ?>">
 
         <?php
+          // Render attributes; avoid inline data: previews for photo attrs
+          $photo_attrs = ['jpegPhoto','jpegphoto','thumbnailPhoto','thumbnailphoto','photo'];
           foreach ($attribute_map as $attribute => $attr_r) {
-            $label = $attr_r['label'];
-            $onkeyup = isset($attr_r['onkeyup']) ? $attr_r['onkeyup'] : "";
-            $inputtype = isset($attr_r['inputtype']) ? $attr_r['inputtype'] : "";
+            $label    = $attr_r['label'];
+            $onkeyup  = isset($attr_r['onkeyup']) ? $attr_r['onkeyup'] : "";
+            $inputtype= isset($attr_r['inputtype']) ? $attr_r['inputtype'] : "";
             if ($attribute == $LDAP['account_attribute']) { $label = "<strong>$label</strong><sup>&ast;</sup>"; }
             $these_values = isset($$attribute) ? $$attribute : array();
-            render_attribute_fields($attribute,$label,$these_values,$dn,$onkeyup,$inputtype);
+
+            if (in_array($attribute, $photo_attrs, true)) {
+              // Custom rendering: preview via self endpoint + plain file input (no data: URIs)
+              ?>
+              <div class="form-group">
+                <label class="col-sm-3 control-label"><?php echo $label; ?></label>
+                <div class="col-sm-6">
+                  <img class="avatar" alt="Avatar preview"
+                       src="<?php echo $SELF; ?>?avatar=1&account_identifier=<?php echo urlencode($account_identifier); ?>&t=<?php echo (int)$status_ts; ?>"
+                       onerror="this.style.display='none'">
+                  <input type="file" class="form-control" name="<?php echo htmlspecialchars($attribute); ?>" accept="image/*">
+                  <div class="help-min">Upload a new image to replace the existing photo. Leave blank to keep the current one.</div>
+                </div>
+              </div>
+              <?php
+            } else {
+              render_attribute_fields($attribute,$label,$these_values,$dn,$onkeyup,$inputtype);
+            }
           }
         ?>
 
@@ -666,19 +744,11 @@ async function refreshMfa(){
     var btnT = document.getElementById('btn-reset-totp');
     if (btnT){
       if (!totp || MFA_BLOCKED) btnT.remove();
-    } else {
-      if (totp && !MFA_BLOCKED){
-        // could re-insert dynamically if you want; omitted for simplicity
-      }
     }
 
     var btnW = document.getElementById('btn-reset-wa');
     if (btnW){
       if (webn<=0 || MFA_BLOCKED) btnW.remove();
-    } else {
-      if (webn>0 && !MFA_BLOCKED){
-        // could re-insert dynamically if you want; omitted for simplicity
-      }
     }
 
     var age = document.getElementById('mfa-age');
