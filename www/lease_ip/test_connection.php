@@ -119,7 +119,7 @@ $usingMtls    = in_array($mtlsHeader, ['on','1','true'], true);
 /* --- Lease API base: prefer env/lease_url; else default to APEX of current host (keep scheme) --- */
 $hostNow = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
 $labels  = explode('.', $hostNow);
-$apex    = (count($labels) >= 3) ? implode('.', array_slice($labels, -3)) : $hostNow; // users.mydomain.com -> mydomain.com
+$apex    = (count($labels) >= 3) ? implode('.', array_slice($labels, -3)) : $hostNow;
 $scheme  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443') ? 'https' : 'http';
 $defaultApexBase = $scheme . '://' . $apex . '/endpoints/lease_ip.php';
 
@@ -178,21 +178,15 @@ $sourceTag = 'LUM Iframe';
 
 /* ---- Same-origin proxy: must call GET ?add=<IP> with headers (no extra params!) ---- */
 if (isset($_GET['do']) && $_GET['do'] === 'lease') {
-    // EXACTLY one op key: add=<ip>
     $target = $base . (strpos($base,'?')!==false ? '&' : '?') . 'add=' . rawurlencode($clientIp);
-
-    // Required headers for your endpoint
     $headers = [
         'Accept: application/json',
-        'X-IP-Lease-Label: '  . $username,  // label
-        'X-IP-Lease-Source: ' . $sourceTag, // source
-        // optional helpers:
+        'X-IP-Lease-Label: '  . $username,
+        'X-IP-Lease-Source: ' . $sourceTag,
         'X-Forwarded-For: '   . $clientIp,
     ];
-
     [$ok, $code, $err, $body] = http_request($target, 'GET', null, $headers);
     error_log(sprintf('LUM-ConnTest: lease GET %s http=%d ok=%d', $target, (int)$code, $ok?1:0));
-
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode([
         'ok'     => $ok,
@@ -242,10 +236,7 @@ elseif ($format === 'iframe') {
     $showLeasedRow = empty($filterKeys) || isset($filterKeys['leased']);
 
     header('Content-Type: text/html; charset=utf-8');
-    // Preserve resolved lease base for proxy
-    $selfLeaseUrl = $_SERVER['PHP_SELF']
-                  . '?format=iframe&do=lease&lease_url='
-                  . rawurlencode($base);
+    $selfLeaseUrl = $_SERVER['PHP_SELF'] . '?format=iframe&do=lease&lease_url=' . rawurlencode($base);
     ?>
     <!doctype html>
     <html>
@@ -253,67 +244,57 @@ elseif ($format === 'iframe') {
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <style>
-        :root { --fg:#0a0a0a; --muted:#6b7280; --card:#ffffff; --border:rgba(0,0,0,.08); }
-        @media (prefers-color-scheme: dark) {
-          :root { --fg:#e5e7eb; --muted:#94a3b8; --card:#0b0f13; --border:rgba(255,255,255,.08); }
+        :root { --fg:#0a0a0a; --muted:#6b7280; --card:#0b0f13; --border:rgba(255,255,255,.08);
+                --glow: rgba(127,209,255,.35); --line: rgba(127,209,255,.45); }
+        @media (prefers-color-scheme: light) {
+          :root { --fg:#0a0a0a; --muted:#6b7280; --card:#ffffff; --border:rgba(0,0,0,.08);
+                  --glow: rgba(0,123,255,.25); --line: rgba(0,123,255,.45); }
         }
         *{box-sizing:border-box}
         body{margin:0; background:transparent; color:var(--fg); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial}
-        .micro{padding:10px 12px; border-radius:12px; background:var(--card); border:1px solid var(--border)}
+        .micro{padding:10px 12px; border-radius:12px; background:var(--card); border:1px solid var(--border); overflow:visible;}
         .row{display:flex; justify-content:space-between; align-items:center; padding:8px 0}
         .row+.row{border-top:1px solid var(--border)}
-        .label{
-          font-weight:600; letter-spacing:.2px;
-          display:inline-flex; align-items:center; gap:6px;
-        }
-        .yes{font-weight:700}
-        .no{font-weight:700}
+        .label{font-weight:600; letter-spacing:.2px; display:inline-flex; align-items:center; gap:6px;}
+        .yes,.no{font-weight:700}
         .val{display:inline-flex; align-items:center; gap:8px;}
         .btn{display:inline-block; text-decoration:none; line-height:1; padding:8px 12px; border-radius:9px; font-weight:700; cursor:pointer; user-select:none; -webkit-tap-highlight-color:transparent;}
-        @media (prefers-color-scheme: dark){
-          .btn{ background:rgba(127,209,255,.18); color:#d6f1ff; border:1px solid rgba(127,209,255,.55); }
-          .btn:hover,.btn:active{ background:rgba(127,209,255,.26); }
-        }
+        .btn{ background:rgba(127,209,255,.18); color:#d6f1ff; border:1px solid var(--line); }
+        .btn:hover,.btn:active{ background:rgba(127,209,255,.26); }
         @media (prefers-color-scheme: light){
-          .btn{ background:rgba(0,123,255,.14); color:#0b63c7; border:1px solid rgba(0,123,255,.50); }
+          .btn{ background:rgba(0,123,255,.14); color:#0b63c7; border-color: var(--line); }
           .btn:hover,.btn:active{ background:rgba(0,123,255,.22); }
         }
         .btn[aria-busy="true"]{opacity:.7; pointer-events:none}
 
-        /* ===== Mobile/desktop-friendly neon tooltip ===== */
+        /* === compact neon info icon === */
         .tip{
           position:relative; display:inline-flex; align-items:center; justify-content:center;
-          width:22px; height:22px; border-radius:50%; font-size:13px; line-height:1; font-weight:700;
-          background: radial-gradient(circle at 30% 30%, rgba(127,209,255,.25), rgba(127,209,255,.05) 60%), rgba(15,20,28,.72);
-          color:#d6f1ff; border:1px solid rgba(127,209,255,.55);
-          box-shadow: 0 0 12px rgba(127,209,255,.35), inset 0 0 8px rgba(127,209,255,.15);
+          width:16px; height:16px; border-radius:50%; font-size:11px; line-height:1; font-weight:700;
+          background: radial-gradient(circle at 30% 30%, rgba(127,209,255,.22), rgba(127,209,255,.06) 60%), rgba(15,20,28,.72);
+          color:#d6f1ff; border:1px solid var(--line);
+          box-shadow: 0 0 8px var(--glow), inset 0 0 6px rgba(127,209,255,.15);
           cursor:pointer; outline:none; user-select:none; touch-action:manipulation;
         }
-        .tip::after{
-          content: attr(data-tip);
-          position:absolute; bottom:125%; left:50%; transform:translateX(-50%) translateY(-8px);
-          max-width: min(88vw, 320px); padding:10px 12px; border-radius:10px;
-          background: rgba(11,15,19,.98); color:#cfe9ff; border:1px solid rgba(127,209,255,.45);
-          box-shadow: 0 10px 34px rgba(0,180,255,.28), 0 0 18px rgba(0,180,255,.18);
-          opacity:0; pointer-events:none; transition:opacity .15s ease, transform .15s ease;
-          font-size:12px; letter-spacing:.2px; white-space:normal; text-align:left;
-          z-index: 50;
-        }
-        .tip::before{
-          content:""; position:absolute; bottom:118%; left:50%; transform:translateX(-50%);
-          width:0; height:0; border-left:7px solid transparent; border-right:7px solid transparent;
-          border-top:7px solid rgba(127,209,255,.45);
-          filter: drop-shadow(0 0 4px rgba(0,180,255,.35));
-          opacity:0; transition:opacity .15s ease;
-        }
-        /* Show on hover/focus for desktop, and when toggled (.open) for mobile */
-        .tip:hover::after, .tip:focus::after, .tip.open::after{ opacity:1; transform:translateX(-50%) translateY(-12px); }
-        .tip:hover::before, .tip:focus::before, .tip.open::before{ opacity:1; }
-
         @media (max-width:480px){
-          .tip{ width:24px; height:24px; font-size:14px; }
-          .tip::after{ font-size:13px; }
+          .tip{ width:18px; height:18px; font-size:12px; }
         }
+
+        /* === JS-positioned bubble (kept within iframe viewport) === */
+        #tipBubble, #tipArrow{ position:fixed; z-index:2147483646; }
+        #tipBubble{
+          max-width:min(90vw, 320px); padding:10px 12px; border-radius:10px;
+          background: rgba(11,15,19,.98); color:#cfe9ff; border:1px solid var(--line);
+          box-shadow: 0 10px 28px var(--glow), 0 0 14px rgba(0,180,255,.18);
+          font-size:12px; letter-spacing:.2px; white-space:normal; text-align:left;
+        }
+        @media (prefers-color-scheme: light){
+          #tipBubble{ background:#0b1a2a; color:#d9f1ff; }
+        }
+        #tipArrow{
+          width:0; height:0; filter: drop-shadow(0 0 4px var(--glow));
+        }
+        .hidden{ display:none !important; }
       </style>
     </head>
     <body>
@@ -322,15 +303,8 @@ elseif ($format === 'iframe') {
         <div class="row">
           <span class="label">
             Inside LAN
-            <span
-              class="tip"
-              tabindex="0"
-              role="button"
-              aria-haspopup="true"
-              aria-expanded="false"
-              title="Private IP or localhost"
-              data-tip="<?php echo h('True if your client IP is private (RFC1918: 10/8, 172.16–31/12, 192.168/16) or localhost. Indicates you are on the local network.'); ?>"
-            >i</span>
+            <span class="tip" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"
+              data-tip="<?php echo h('True if your client IP is private (RFC1918: 10/8, 172.16–31/12, 192.168/16) or localhost. Indicates you are on the local network.'); ?>">i</span>
           </span>
           <span class="<?php echo $inLan ? 'yes' : 'no'; ?>"><?php echo $inLan ? '✅' : '❌'; ?></span>
         </div>
@@ -340,15 +314,8 @@ elseif ($format === 'iframe') {
         <div class="row">
           <span class="label">
             On VPN
-            <span
-              class="tip"
-              tabindex="0"
-              role="button"
-              aria-haspopup="true"
-              aria-expanded="false"
-              title="Within VPN_CIDR"
-              data-tip="<?php echo h('True if your client IP is within VPN_CIDR range(s): ' . ((implode(', ', $vpnCidrs) ?: '—')) . '. Indicates a tunnel is active.'); ?>"
-            >i</span>
+            <span class="tip" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"
+              data-tip="<?php echo h('True if your client IP is within VPN_CIDR range(s): ' . ((implode(', ', $vpnCidrs) ?: '—')) . '. Indicates a tunnel is active.'); ?>">i</span>
           </span>
           <span class="<?php echo $onVpn ? 'yes' : 'no'; ?>"><?php echo $onVpn ? '✅' : '❌'; ?></span>
         </div>
@@ -358,15 +325,8 @@ elseif ($format === 'iframe') {
         <div class="row">
           <span class="label">
             mTLS
-            <span
-              class="tip"
-              tabindex="0"
-              role="button"
-              aria-haspopup="true"
-              aria-expanded="false"
-              title="Client certificate verified"
-              data-tip="<?php echo h('True if the reverse proxy verified a client certificate and sent X-MTLS: on. Proves your browser presented a valid mTLS cert.'); ?>"
-            >i</span>
+            <span class="tip" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"
+              data-tip="<?php echo h('True if the reverse proxy verified a client certificate and sent X-MTLS: on. Proves your browser presented a valid mTLS cert.'); ?>">i</span>
           </span>
           <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
         </div>
@@ -376,21 +336,8 @@ elseif ($format === 'iframe') {
         <div class="row">
           <span class="label">
             Leased IP
-            <span
-              class="tip"
-              tabindex="0"
-              role="button"
-              aria-haspopup="true"
-              aria-expanded="false"
-              title="Allowlisted via Lease API"
-              data-tip="<?php
-                echo h(
-                  'True if your current IP is on the Lease IP allowlist. ' .
-                  'If not, “Lease this IP” will call the API via same-origin proxy ' .
-                  '(label=' . $username . ', source=' . $sourceTag . ') to add this IP.'
-                );
-              ?>"
-            >i</span>
+            <span class="tip" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"
+              data-tip="<?php echo h('True if your current IP is on the Lease IP allowlist. If not, “Lease this IP” will call the API via same-origin proxy (label=' . $username . ', source=LUM Iframe) to add this IP.'); ?>">i</span>
           </span>
           <span class="val">
             <?php if ($allNo && $isV4): ?>
@@ -416,10 +363,8 @@ elseif ($format === 'iframe') {
             try {
               fetch(url, { credentials:'include' })
                 .then(function(r){ return r.json().catch(function(){return {};}); })
-                .then(function(j){
-                  // console.log('lease proxy', j);
-                })
-                .catch(function(){ /* ignore */ })
+                .then(function(_j){})
+                .catch(function(){})
                 .finally(finish);
             } catch (_){ finish(); }
           });
@@ -427,38 +372,118 @@ elseif ($format === 'iframe') {
       </script>
       <?php endif; ?>
 
+      <!-- Tooltip bubble (viewport-clamped) -->
+      <div id="tipBubble" class="hidden" role="dialog" aria-live="polite"></div>
+      <div id="tipArrow"  class="hidden" aria-hidden="true"></div>
+
       <script>
         (function(){
-          // Tooltip toggles for mobile/desktop
-          var openTip = null;
-          function closeTip(){
-            if (openTip){
-              openTip.classList.remove('open');
-              openTip.setAttribute('aria-expanded','false');
-              openTip = null;
+          var openEl = null;
+          var bubble  = document.getElementById('tipBubble');
+          var arrow   = document.getElementById('tipArrow');
+          var margin  = 8;           // viewport margin
+          var gap     = 8;           // distance between icon and bubble
+          var aSize   = 7;           // arrow size (px)
+          var hoverTO = null;
+
+          function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+          function place(el){
+            var r = el.getBoundingClientRect();
+            var vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
+            var vh = Math.max(document.documentElement.clientHeight, window.innerHeight || 0);
+
+            bubble.textContent = el.getAttribute('data-tip') || '';
+            bubble.classList.remove('hidden');
+            arrow.classList.remove('hidden');
+
+            // Measure bubble after content paints
+            var bw = bubble.offsetWidth;
+            var bh = bubble.offsetHeight;
+
+            var cx = r.left + r.width/2;    // anchor center x
+            var top = r.top - gap - bh;     // try above
+            var placeTop = true;
+            if (top < margin) {             // not enough room above => place below
+              top = r.bottom + gap;
+              placeTop = false;
             }
-          }
-          function toggleTip(el){
-            if (openTip === el){ closeTip(); return; }
-            closeTip();
-            el.classList.add('open');
+
+            var left = clamp(cx - bw/2, margin, vw - bw - margin);
+            bubble.style.top  = Math.round(top)  + 'px';
+            bubble.style.left = Math.round(left) + 'px';
+
+            // Arrow
+            var ax = clamp(cx, left + aSize + 2, left + bw - aSize - 2);
+            if (placeTop){
+              // Arrow points DOWN (border-top visible) just under bubble
+              arrow.style.borderLeft   = aSize + 'px solid transparent';
+              arrow.style.borderRight  = aSize + 'px solid transparent';
+              arrow.style.borderBottom = '0';
+              arrow.style.borderTop    = aSize + 'px solid var(--line)';
+              arrow.style.top  = Math.round(top + bh) + 'px';
+              arrow.style.left = Math.round(ax - aSize) + 'px';
+            } else {
+              // Arrow points UP (border-bottom visible) just above bubble
+              arrow.style.borderLeft   = aSize + 'px solid transparent';
+              arrow.style.borderRight  = aSize + 'px solid transparent';
+              arrow.style.borderTop    = '0';
+              arrow.style.borderBottom = aSize + 'px solid var(--line)';
+              arrow.style.top  = Math.round(top - aSize) + 'px';
+              arrow.style.left = Math.round(ax - aSize) + 'px';
+            }
+
+            // aria
             el.setAttribute('aria-expanded','true');
-            openTip = el;
           }
+
+          function close(){
+            if (!openEl) return;
+            openEl.setAttribute('aria-expanded','false');
+            openEl = null;
+            bubble.classList.add('hidden');
+            arrow.classList.add('hidden');
+          }
+
+          function open(el){
+            if (openEl === el){ close(); return; }
+            openEl = el;
+            place(el);
+          }
+
+          // Click/tap to toggle
           document.addEventListener('click', function(ev){
             var t = ev.target.closest('.tip');
-            if (t){ ev.preventDefault(); toggleTip(t); }
-            else { closeTip(); }
+            if (t){ ev.preventDefault(); open(t); }
+            else { close(); }
           }, {passive:true});
 
-          document.addEventListener('keydown', function(ev){
-            if (ev.key === 'Escape'){ closeTip(); }
-            if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList && ev.target.classList.contains('tip')){
-              ev.preventDefault(); toggleTip(ev.target);
+          // Hover (desktop): open on enter, close on leave (with small delay)
+          document.addEventListener('mouseover', function(ev){
+            var t = ev.target.closest('.tip');
+            if (!t) return;
+            clearTimeout(hoverTO);
+            open(t);
+          });
+          document.addEventListener('mouseout', function(ev){
+            if (ev.target && ev.target.closest && ev.target.closest('.tip')){
+              hoverTO = setTimeout(close, 120);
             }
           });
 
-          window.addEventListener('blur', closeTip);
+          // Keyboard support
+          document.addEventListener('keydown', function(ev){
+            if (ev.key === 'Escape'){ close(); }
+            if ((ev.key === 'Enter' || ev.key === ' ') && document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('tip')){
+              ev.preventDefault();
+              open(document.activeElement);
+            }
+          });
+
+          // Re-clamp on resize/scroll
+          window.addEventListener('resize', function(){ if (openEl) place(openEl); });
+          window.addEventListener('scroll', function(){ if (openEl) place(openEl); }, {passive:true});
+          window.addEventListener('blur', close);
         })();
       </script>
     </body>
@@ -520,7 +545,6 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
 </style>
 
 <div class="container conn-wrap">
-
   <div class="panel panel-modern">
     <div class="panel-heading text-center">CONNECTION CHECK</div>
     <div class="panel-body">
@@ -559,7 +583,7 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
         <span class="<?php echo $usingMtls ? 'flag-yes':'flag-no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
       </div>
 
-      <!-- Hint line: simplified for non-admins; detailed for admins -->
+      <!-- Hint line -->
       <div class="smallprint hint">
         <?php if ($usingMtls): ?>
           mTLS <b>detected</b> via header <code>X-MTLS</code>=<code>on</code>.
@@ -589,7 +613,6 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
           Status shown without whitelist info.
         </div>
       <?php endif; ?>
-
     </div>
   </div>
 </div>
