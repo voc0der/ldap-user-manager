@@ -234,7 +234,7 @@ if ($format === 'json') {
     exit;
 }
 elseif ($format === 'iframe') {
-    // --- NEW: filter support for iframe mini ---
+    // --- filter support for iframe mini ---
     $filterKeys = parse_filter_keys((string)($_GET['filter'] ?? ''));
     $showLanRow    = empty($filterKeys) || isset($filterKeys['lan']);
     $showVpnRow    = empty($filterKeys) || isset($filterKeys['vpn']);
@@ -262,7 +262,10 @@ elseif ($format === 'iframe') {
         .micro{padding:10px 12px; border-radius:12px; background:var(--card); border:1px solid var(--border)}
         .row{display:flex; justify-content:space-between; align-items:center; padding:8px 0}
         .row+.row{border-top:1px solid var(--border)}
-        .label{font-weight:600; letter-spacing:.2px}
+        .label{
+          font-weight:600; letter-spacing:.2px;
+          display:inline-flex; align-items:center; gap:6px;
+        }
         .yes{font-weight:700}
         .no{font-weight:700}
         .val{display:inline-flex; align-items:center; gap:8px;}
@@ -276,31 +279,119 @@ elseif ($format === 'iframe') {
           .btn:hover,.btn:active{ background:rgba(0,123,255,.22); }
         }
         .btn[aria-busy="true"]{opacity:.7; pointer-events:none}
+
+        /* ===== Mobile/desktop-friendly neon tooltip ===== */
+        .tip{
+          position:relative; display:inline-flex; align-items:center; justify-content:center;
+          width:22px; height:22px; border-radius:50%; font-size:13px; line-height:1; font-weight:700;
+          background: radial-gradient(circle at 30% 30%, rgba(127,209,255,.25), rgba(127,209,255,.05) 60%), rgba(15,20,28,.72);
+          color:#d6f1ff; border:1px solid rgba(127,209,255,.55);
+          box-shadow: 0 0 12px rgba(127,209,255,.35), inset 0 0 8px rgba(127,209,255,.15);
+          cursor:pointer; outline:none; user-select:none; touch-action:manipulation;
+        }
+        .tip::after{
+          content: attr(data-tip);
+          position:absolute; bottom:125%; left:50%; transform:translateX(-50%) translateY(-8px);
+          max-width: min(88vw, 320px); padding:10px 12px; border-radius:10px;
+          background: rgba(11,15,19,.98); color:#cfe9ff; border:1px solid rgba(127,209,255,.45);
+          box-shadow: 0 10px 34px rgba(0,180,255,.28), 0 0 18px rgba(0,180,255,.18);
+          opacity:0; pointer-events:none; transition:opacity .15s ease, transform .15s ease;
+          font-size:12px; letter-spacing:.2px; white-space:normal; text-align:left;
+          z-index: 50;
+        }
+        .tip::before{
+          content:""; position:absolute; bottom:118%; left:50%; transform:translateX(-50%);
+          width:0; height:0; border-left:7px solid transparent; border-right:7px solid transparent;
+          border-top:7px solid rgba(127,209,255,.45);
+          filter: drop-shadow(0 0 4px rgba(0,180,255,.35));
+          opacity:0; transition:opacity .15s ease;
+        }
+        /* Show on hover/focus for desktop, and when toggled (.open) for mobile */
+        .tip:hover::after, .tip:focus::after, .tip.open::after{ opacity:1; transform:translateX(-50%) translateY(-12px); }
+        .tip:hover::before, .tip:focus::before, .tip.open::before{ opacity:1; }
+
+        @media (max-width:480px){
+          .tip{ width:24px; height:24px; font-size:14px; }
+          .tip::after{ font-size:13px; }
+        }
       </style>
     </head>
     <body>
       <div class="micro">
         <?php if ($showLanRow): ?>
-        <div class="row"><span class="label">Inside LAN</span>
+        <div class="row">
+          <span class="label">
+            Inside LAN
+            <span
+              class="tip"
+              tabindex="0"
+              role="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+              title="Private IP or localhost"
+              data-tip="<?php echo h('True if your client IP is private (RFC1918: 10/8, 172.16–31/12, 192.168/16) or localhost. Indicates you are on the local network.'); ?>"
+            >i</span>
+          </span>
           <span class="<?php echo $inLan ? 'yes' : 'no'; ?>"><?php echo $inLan ? '✅' : '❌'; ?></span>
         </div>
         <?php endif; ?>
 
         <?php if ($showVpnRow): ?>
-        <div class="row"><span class="label">On VPN</span>
+        <div class="row">
+          <span class="label">
+            On VPN
+            <span
+              class="tip"
+              tabindex="0"
+              role="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+              title="Within VPN_CIDR"
+              data-tip="<?php echo h('True if your client IP is within VPN_CIDR range(s): ' . ((implode(', ', $vpnCidrs) ?: '—')) . '. Indicates a tunnel is active.'); ?>"
+            >i</span>
+          </span>
           <span class="<?php echo $onVpn ? 'yes' : 'no'; ?>"><?php echo $onVpn ? '✅' : '❌'; ?></span>
         </div>
         <?php endif; ?>
 
         <?php if ($showMtlsRow): ?>
-        <div class="row"><span class="label">mTLS</span>
+        <div class="row">
+          <span class="label">
+            mTLS
+            <span
+              class="tip"
+              tabindex="0"
+              role="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+              title="Client certificate verified"
+              data-tip="<?php echo h('True if the reverse proxy verified a client certificate and sent X-MTLS: on. Proves your browser presented a valid mTLS cert.'); ?>"
+            >i</span>
+          </span>
           <span class="<?php echo $usingMtls ? 'yes' : 'no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
         </div>
         <?php endif; ?>
 
         <?php if ($showLeasedRow): ?>
         <div class="row">
-          <span class="label">Leased IP</span>
+          <span class="label">
+            Leased IP
+            <span
+              class="tip"
+              tabindex="0"
+              role="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+              title="Allowlisted via Lease API"
+              data-tip="<?php
+                echo h(
+                  'True if your current IP is on the Lease IP allowlist. ' .
+                  'If not, “Lease this IP” will call the API via same-origin proxy ' .
+                  '(label=' . $username . ', source=' . $sourceTag . ') to add this IP.'
+                );
+              ?>"
+            >i</span>
+          </span>
           <span class="val">
             <?php if ($allNo && $isV4): ?>
               <a id="leaseBtn" class="btn" href="<?php echo h($selfLeaseUrl); ?>" role="button" aria-label="Lease this IP">Lease this IP</a>
@@ -335,6 +426,41 @@ elseif ($format === 'iframe') {
         })();
       </script>
       <?php endif; ?>
+
+      <script>
+        (function(){
+          // Tooltip toggles for mobile/desktop
+          var openTip = null;
+          function closeTip(){
+            if (openTip){
+              openTip.classList.remove('open');
+              openTip.setAttribute('aria-expanded','false');
+              openTip = null;
+            }
+          }
+          function toggleTip(el){
+            if (openTip === el){ closeTip(); return; }
+            closeTip();
+            el.classList.add('open');
+            el.setAttribute('aria-expanded','true');
+            openTip = el;
+          }
+          document.addEventListener('click', function(ev){
+            var t = ev.target.closest('.tip');
+            if (t){ ev.preventDefault(); toggleTip(t); }
+            else { closeTip(); }
+          }, {passive:true});
+
+          document.addEventListener('keydown', function(ev){
+            if (ev.key === 'Escape'){ closeTip(); }
+            if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList && ev.target.classList.contains('tip')){
+              ev.preventDefault(); toggleTip(ev.target);
+            }
+          });
+
+          window.addEventListener('blur', closeTip);
+        })();
+      </script>
     </body>
     </html>
     <?php
