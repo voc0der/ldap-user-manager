@@ -83,7 +83,6 @@ function current_host_url(): string {
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443');
     return ($https ? 'https://' : 'http://') . $host;
 }
-/** Parse iframe filter keys like "lan,vpn,mtls,leased" (case-insensitive). Unknown tokens ignored. */
 function parse_filter_keys(string $spec): array {
     $spec = strtolower(trim($spec));
     if ($spec === '') return [];
@@ -103,20 +102,16 @@ $showMenu = !in_array(strtolower((string)($_GET['render_menu'] ?? '1')), ['0','n
 $clientIp = get_client_ip() ?: '0.0.0.0';
 $isV4     = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 
-/* LAN = any RFC1918 IPv4 + localhost */
 $lanCidrs = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
 $inLan    = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
 
-/* VPN CIDR(s) */
 $vpnSpec  = getenv('VPN_CIDR') ?: '10.2.4.0/24';
 $vpnCidrs = parse_cidr_list($vpnSpec);
 $onVpn    = $isV4 && !empty($vpnCidrs) && ip_in_any_cidr($clientIp, $vpnCidrs);
 
-/* mTLS header */
 $mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
 $usingMtls    = in_array($mtlsHeader, ['on','1','true'], true);
 
-/* --- Lease API base: prefer env/lease_url; else default to APEX of current host (keep scheme) --- */
 $hostNow = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
 $labels  = explode('.', $hostNow);
 $apex    = (count($labels) >= 3) ? implode('.', array_slice($labels, -3)) : $hostNow;
@@ -125,7 +120,6 @@ $defaultApexBase = $scheme . '://' . $apex . '/endpoints/lease_ip.php';
 
 $base = (string)($_GET['lease_url'] ?? (getenv('LEASE_API_BASE') ?: $defaultApexBase));
 
-/* Build list URL: MUST be exactly one op (?list=1) */
 $leaseUrl = (function($u){
     $q = parse_url($u, PHP_URL_QUERY);
     return ($q && preg_match('/(?:^|&)list=1(?:&|$)/', (string)$q))
@@ -172,11 +166,9 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
     }
 }
 
-/* ---- Inline Lease action (for iframe) ---- */
 $allNo     = (!$inLan && !$onVpn && !$usingMtls && !$isWhitelisted);
 $sourceTag = 'LUM Iframe';
 
-/* ---- Same-origin proxy: must call GET ?add=<IP> with headers (no extra params!) ---- */
 if (isset($_GET['do']) && $_GET['do'] === 'lease') {
     $target = $base . (strpos($base,'?')!==false ? '&' : '?') . 'add=' . rawurlencode($clientIp);
     $headers = [
@@ -228,7 +220,6 @@ if ($format === 'json') {
     exit;
 }
 elseif ($format === 'iframe') {
-    // --- filter support for iframe mini ---
     $filterKeys = parse_filter_keys((string)($_GET['filter'] ?? ''));
     $showLanRow    = empty($filterKeys) || isset($filterKeys['lan']);
     $showVpnRow    = empty($filterKeys) || isset($filterKeys['vpn']);
@@ -244,18 +235,24 @@ elseif ($format === 'iframe') {
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <style>
-        :root { --fg:#0a0a0a; --muted:#6b7280; --card:#0b0f13; --border:rgba(255,255,255,.08);
-                --glow: rgba(127,209,255,.35); --line: rgba(127,209,255,.45); }
-        @media (prefers-color-scheme: light) {
-          :root { --fg:#0a0a0a; --muted:#6b7280; --card:#ffffff; --border:rgba(0,0,0,.08);
-                  --glow: rgba(0,123,255,.25); --line: rgba(0,123,255,.45); }
+        /* Correct color tokens: default = dark theme; light overrides below */
+        :root {
+          --fg:#e5e7eb; --muted:#94a3b8; --card:#0b0f13; --border:rgba(255,255,255,.08);
+          --glow:rgba(127,209,255,.35); --line:rgba(127,209,255,.45);
         }
+        @media (prefers-color-scheme: light) {
+          :root {
+            --fg:#0a0a0a; --muted:#6b7280; --card:#ffffff; --border:rgba(0,0,0,.08);
+            --glow:rgba(0,123,255,.25); --line:rgba(0,123,255,.45);
+          }
+        }
+
         *{box-sizing:border-box}
         body{margin:0; background:transparent; color:var(--fg); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial}
         .micro{padding:10px 12px; border-radius:12px; background:var(--card); border:1px solid var(--border); overflow:visible;}
         .row{display:flex; justify-content:space-between; align-items:center; padding:8px 0}
         .row+.row{border-top:1px solid var(--border)}
-        .label{font-weight:600; letter-spacing:.2px; display:inline-flex; align-items:center; gap:6px;}
+        .label{font-weight:600; letter-spacing:.2px; display:inline-flex; align-items:center; gap:6px; color:var(--fg);}
         .yes,.no{font-weight:700}
         .val{display:inline-flex; align-items:center; gap:8px;}
         .btn{display:inline-block; text-decoration:none; line-height:1; padding:8px 12px; border-radius:9px; font-weight:700; cursor:pointer; user-select:none; -webkit-tap-highlight-color:transparent;}
@@ -267,7 +264,7 @@ elseif ($format === 'iframe') {
         }
         .btn[aria-busy="true"]{opacity:.7; pointer-events:none}
 
-        /* === compact neon info icon === */
+        /* Compact neon info icon */
         .tip{
           position:relative; display:inline-flex; align-items:center; justify-content:center;
           width:16px; height:16px; border-radius:50%; font-size:11px; line-height:1; font-weight:700;
@@ -280,7 +277,7 @@ elseif ($format === 'iframe') {
           .tip{ width:18px; height:18px; font-size:12px; }
         }
 
-        /* === JS-positioned bubble (kept within iframe viewport) === */
+        /* JS-positioned bubble kept within iframe viewport */
         #tipBubble, #tipArrow{ position:fixed; z-index:2147483646; }
         #tipBubble{
           max-width:min(90vw, 320px); padding:10px 12px; border-radius:10px;
@@ -291,9 +288,7 @@ elseif ($format === 'iframe') {
         @media (prefers-color-scheme: light){
           #tipBubble{ background:#0b1a2a; color:#d9f1ff; }
         }
-        #tipArrow{
-          width:0; height:0; filter: drop-shadow(0 0 4px var(--glow));
-        }
+        #tipArrow{ width:0; height:0; filter: drop-shadow(0 0 4px var(--glow)); }
         .hidden{ display:none !important; }
       </style>
     </head>
@@ -381,42 +376,35 @@ elseif ($format === 'iframe') {
           var openEl = null;
           var bubble  = document.getElementById('tipBubble');
           var arrow   = document.getElementById('tipArrow');
-          var margin  = 8;           // viewport margin
-          var gap     = 8;           // distance between icon and bubble
-          var aSize   = 7;           // arrow size (px)
+          var margin  = 8;   // viewport margin
+          var gap     = 8;   // distance between icon and bubble
+          var aSize   = 7;   // arrow size
           var hoverTO = null;
 
           function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
 
           function place(el){
-            var r = el.getBoundingClientRect();
-            var vw = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
+            var r  = el.getBoundingClientRect();
+            var vw = Math.max(document.documentElement.clientWidth,  window.innerWidth  || 0);
             var vh = Math.max(document.documentElement.clientHeight, window.innerHeight || 0);
 
             bubble.textContent = el.getAttribute('data-tip') || '';
             bubble.classList.remove('hidden');
             arrow.classList.remove('hidden');
 
-            // Measure bubble after content paints
-            var bw = bubble.offsetWidth;
-            var bh = bubble.offsetHeight;
+            var bw = bubble.offsetWidth, bh = bubble.offsetHeight;
+            var cx = r.left + r.width/2;
 
-            var cx = r.left + r.width/2;    // anchor center x
-            var top = r.top - gap - bh;     // try above
+            var top = r.top - gap - bh;
             var placeTop = true;
-            if (top < margin) {             // not enough room above => place below
-              top = r.bottom + gap;
-              placeTop = false;
-            }
+            if (top < margin){ top = r.bottom + gap; placeTop = false; }
 
             var left = clamp(cx - bw/2, margin, vw - bw - margin);
             bubble.style.top  = Math.round(top)  + 'px';
             bubble.style.left = Math.round(left) + 'px';
 
-            // Arrow
             var ax = clamp(cx, left + aSize + 2, left + bw - aSize - 2);
             if (placeTop){
-              // Arrow points DOWN (border-top visible) just under bubble
               arrow.style.borderLeft   = aSize + 'px solid transparent';
               arrow.style.borderRight  = aSize + 'px solid transparent';
               arrow.style.borderBottom = '0';
@@ -424,7 +412,6 @@ elseif ($format === 'iframe') {
               arrow.style.top  = Math.round(top + bh) + 'px';
               arrow.style.left = Math.round(ax - aSize) + 'px';
             } else {
-              // Arrow points UP (border-bottom visible) just above bubble
               arrow.style.borderLeft   = aSize + 'px solid transparent';
               arrow.style.borderRight  = aSize + 'px solid transparent';
               arrow.style.borderTop    = '0';
@@ -433,7 +420,6 @@ elseif ($format === 'iframe') {
               arrow.style.left = Math.round(ax - aSize) + 'px';
             }
 
-            // aria
             el.setAttribute('aria-expanded','true');
           }
 
@@ -451,14 +437,27 @@ elseif ($format === 'iframe') {
             place(el);
           }
 
-          // Click/tap to toggle
-          document.addEventListener('click', function(ev){
-            var t = ev.target.closest('.tip');
-            if (t){ ev.preventDefault(); open(t); }
-            else { close(); }
-          }, {passive:true});
+          // Tap/click: support label taps (easier on mobile) and the icon
+          function handleOpenFromEvent(ev){
+            var tip = ev.target.closest('.tip');
+            if (!tip){
+              var label = ev.target.closest('.label');
+              if (label) tip = label.querySelector('.tip');
+            }
+            if (tip){
+              ev.preventDefault();
+              open(tip);
+            } else {
+              close();
+            }
+          }
 
-          // Hover (desktop): open on enter, close on leave (with small delay)
+          // Pointer & touch (mobile reliable)
+          document.addEventListener('pointerup', handleOpenFromEvent, {passive:false});
+          document.addEventListener('touchend',  handleOpenFromEvent, {passive:false});
+          document.addEventListener('click',     handleOpenFromEvent, {passive:false});
+
+          // Hover (desktop)
           document.addEventListener('mouseover', function(ev){
             var t = ev.target.closest('.tip');
             if (!t) return;
@@ -494,7 +493,6 @@ elseif ($format === 'iframe') {
 
 render_header('Test Connection');
 
-/* Hide the top menu/nav when render_menu=0 (useful for iframes) */
 if (!$showMenu) {
     echo '<style>.navbar, .breadcrumb, .page-header{display:none!important;} body{padding-top:0!important;}</style>';
 }
@@ -522,7 +520,6 @@ if (!$showMenu) {
 .table-modern.table-striped>tbody>tr:nth-of-type(even) { background: rgba(255,255,255,.015); }
 .table-modern>tbody>tr:hover td { background: rgba(255,255,255,.06); }
 
-/* Readability for first-column labels */
 .key { color:#e2f1ff; font-weight:700; letter-spacing:.2px; }
 .badge-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-family:monospace; font-size:.98em;
   background:#1a2b3a; color:#a9e1ff; border:1px solid rgba(127,209,255,.35); }
@@ -535,7 +532,6 @@ if (!$showMenu) {
 .hint { margin-top:10px; }
 hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
 
-/* Mobile tweaks: larger label text & spacing */
 @media (max-width: 768px) {
   .panel-modern .panel-body { padding:12px; }
   .table-modern>tbody>tr>td { padding:10px 8px; }
@@ -565,7 +561,6 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
 
       <hr class="soft" />
 
-      <!-- Independent flags (multiple ✅ can be true) -->
       <div class="kv">
         <span>Your device is inside the LAN (RFC1918).</span>
         <span class="<?php echo $inLan ? 'flag-yes':'flag-no'; ?>"><?php echo $inLan ? '✅' : '❌'; ?></span>
@@ -583,7 +578,6 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
         <span class="<?php echo $usingMtls ? 'flag-yes':'flag-no'; ?>"><?php echo $usingMtls ? '✅' : '❌'; ?></span>
       </div>
 
-      <!-- Hint line -->
       <div class="smallprint hint">
         <?php if ($usingMtls): ?>
           mTLS <b>detected</b> via header <code>X-MTLS</code>=<code>on</code>.
