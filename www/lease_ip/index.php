@@ -284,7 +284,7 @@ td.text-right .btn { margin-left:6px; }
     userId: <?php echo json_encode($username); ?>
   };
 </script>
-<script src="lease_ui.min.js"></script>
+<script src="lease_ui.js"></script>
 
 <!-- Reusable geo popup root (inserted once) -->
 <div id="lum-geo-pop" class="geo-pop" aria-hidden="true" role="dialog"></div>
