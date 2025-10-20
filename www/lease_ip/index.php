@@ -5,7 +5,7 @@ set_page_access('auth');
 
 @session_start();
 global $IS_ADMIN, $USER_ID;
-$isAdmin = !empty($IS_ADMIN);
+$isAdmin  = !empty($IS_ADMIN);
 $username = $USER_ID ?? ($_SESSION['user_id'] ?? 'unknown');
 
 function canon_ip(?string $ip): ?string {
@@ -24,29 +24,24 @@ function get_client_ip(): ?string {
 }
 $clientIp = get_client_ip();
 
-// ---- Gate by Authelia group: 'jellyfin' ------------------------------------
-// Trusted proxy headers (must be set by your reverse proxy)
+// ---------- Gate by Authelia group: 'jellyfin' ----------
 function _h(string $k): ?string {
     $hk = 'HTTP_' . strtoupper(str_replace('-', '_', $k));
     return isset($_SERVER[$hk]) ? trim((string)$_SERVER[$hk]) : null;
 }
-
-// Pull uid from header first, then session (avoid leaking identity on failure)
-$uid_hdr = _h('Remote-User') ?: ($USER_ID ?? ($_SESSION['user_id'] ?? null));
+$uid_hdr    = _h('Remote-User') ?: ($USER_ID ?? ($_SESSION['user_id'] ?? null));
 $groups_raw = _h('Remote-Groups') ?? '';
-$groups_list = array_filter(array_map('trim', preg_split('/[;,\s]+/', $groups_raw)));
-
-// case-insensitive membership check for safety
+$groups_list  = array_filter(array_map('trim', preg_split('/[;,\s]+/', $groups_raw)));
 $groups_lower = array_map('strtolower', $groups_list);
 $has_jellyfin = in_array('jellyfin', $groups_lower, true);
 
-// Block if not a member of 'jellyfin'
 if (!$uid_hdr || !$has_jellyfin) {
     render_header('Lease IP');
-    echo '<div class="container" style="max-width:860px;margin-top:20px">'
-       . '<div class="alert alert-danger">'
-       . 'Access denied: this page is only available to members of the <code>jellyfin</code> group.'
-       . '</div></div>';
+    echo '<div class="container" style="max-width:860px;margin-top:20px">
+            <div class="alert alert-danger">
+              Access denied: this page is only available to members of the <code>jellyfin</code> group.
+            </div>
+          </div>';
     render_footer();
     exit;
 }
@@ -54,7 +49,7 @@ if (!$uid_hdr || !$has_jellyfin) {
 render_header('Lease IP');
 ?>
 <style>
-/* ---------- modern chrome (Bootstrap 3 friendly) ---------- */
+/* ---------- modern chrome ---------- */
 .lease-wrap { max-width: 980px; margin: 18px auto 40px; }
 .panel-modern { background:#0b0f13; border:1px solid rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
 .panel-modern .panel-heading {
@@ -63,24 +58,16 @@ render_header('Lease IP');
   padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.08);
 }
 .panel-modern .panel-body { padding:14px; }
-
 .table-modern { margin:0; }
 .table-modern>thead>tr>th,
 .table-modern>tbody>tr>td,
 .table-modern tfoot td { border-color: rgba(255,255,255,.08); }
-
 .table-modern>thead>tr>th {
   color:#9fb6c9; font-size:12px; text-transform:uppercase; letter-spacing:.35px; border-bottom-width:1px;
 }
-
-/* Zebra striping to match Users/Groups pages */
 .table-modern.table-striped>tbody>tr:nth-of-type(odd)  { background: rgba(255,255,255,.03); }
 .table-modern.table-striped>tbody>tr:nth-of-type(even) { background: rgba(255,255,255,.015); }
-
-/* Hover */
 .table-modern>tbody>tr:hover td { background: rgba(255,255,255,.06); }
-
-/* Stronger stripes on small screens so it doesn’t look flat */
 @media (max-width: 768px) {
   .panel-modern .panel-body { padding:12px; }
   .table-modern.table-striped>tbody>tr:nth-of-type(odd)  { background: rgba(255,255,255,.06); }
@@ -88,7 +75,6 @@ render_header('Lease IP');
   .table-modern>tbody>tr:hover td { background: rgba(255,255,255,.09); }
   .table-modern>tbody>tr>td, .table-modern>thead>tr>th { padding:10px 8px; }
 }
-
 .badge-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-family:monospace; font-size:.95em;
   background:#1a2b3a; color:#a9e1ff; border:1px solid rgba(127,209,255,.35); }
 .smallprint, .help-note { color:#8aa0b2; font-size:12px; }
@@ -98,22 +84,71 @@ render_header('Lease IP');
 .btn-primary.btn-pill { background:#2a8bdc; border-color:#2a8bdc; }
 .btn-danger.btn-pill { background:#cf4444; border-color:#cf4444; }
 .btn-muted { background:transparent; border:1px solid rgba(255,255,255,.12); color:#9fb6c9; }
-
 .header-inline { display:flex; align-items:center; gap:12px; }
 .header-inline .grow { flex:1; }
 .header-title { font-size:13px; letter-spacing:.35px; }
 .header-count { color:#9fb6c9; font-weight:600; margin-left:8px; letter-spacing:.6px; }
-
 tfoot td { background:rgba(255,255,255,.02); }
 .input-slim { max-width: 22rem; }
 .control-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 td.text-right .btn { margin-left:6px; }
 .code-mono { font-family:monospace; }
+
+/* ---------- IP link & cyberpunk popup ---------- */
+.ip-link {
+  font-family:monospace;
+  text-decoration:none;
+  border-bottom:1px dashed rgba(127,209,255,.6);
+  color:#a9e1ff;
+  cursor:pointer;
+}
+.ip-link:hover, .ip-link:focus { color:#e5f6ff; border-bottom-color:#9fe6ff; outline:0; }
+.ip-badge-static { opacity:.7; font-size:.9em; margin-left:.25rem; }
+
+/* floating panel uses fixed coords so it stays inside iframes nicely */
+.geo-pop {
+  position:fixed; z-index:99999; display:none;
+  min-width:260px; max-width:360px;
+  color:#d9f3ff; background:#071018;
+  border:1px solid rgba(39,225,255,.6);
+  box-shadow:
+    0 0 0 1px rgba(39,225,255,.15) inset,
+    0 10px 30px rgba(39,225,255,.18),
+    0 0 40px rgba(180,50,255,.15);
+  border-radius:12px; padding:10px 12px;
+}
+.geo-pop.on { display:block; }
+.geo-hd { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:#8de6ff; }
+.geo-hd .ip { font-family:monospace; font-weight:600; }
+.geo-close {
+  background:transparent; border:0; color:#9fe6ff; font-size:18px; line-height:1; cursor:pointer;
+}
+.geo-close:hover { color:#fff; }
+.geo-body { margin-top:8px; font-size:13px; }
+.geo-grid { display:grid; grid-template-columns: 92px 1fr; gap:6px 10px; }
+.geo-k { color:#8aa0b2; text-transform:uppercase; letter-spacing:.3px; font-size:11px; }
+.geo-v { color:#e6f7ff; word-break:break-word; }
+.geo-tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+.geo-tag { font-size:11px; padding:2px 6px; border-radius:999px; border:1px solid rgba(255,255,255,.2); background:#0f1a25; }
+.geo-loader { font-style:italic; opacity:.8; }
+.geo-actions { margin-top:8px; display:flex; gap:8px; }
+.geo-actions a, .geo-actions button {
+  border:1px solid rgba(255,255,255,.2); background:#0f1a25; color:#cfe9ff;
+  border-radius:999px; padding:4px 8px; font-size:12px; text-decoration:none;
+}
+.geo-actions a:hover, .geo-actions button:hover { background:#142234; }
+
+/* subtle neon edge */
+.geo-pop::after {
+  content:""; position:absolute; inset:-1px; border-radius:12px; pointer-events:none;
+  box-shadow: 0 0 12px rgba(39,225,255,.35), 0 0 28px rgba(180,50,255,.25);
+}
 </style>
 
 <div class="container lease-wrap">
 
-  <!-- USER CARD (keep for everyone; handy quick actions) -->
+  <!-- USER CARD -->
   <div class="panel panel-modern">
     <div class="panel-heading text-center header-title">LEASE IP</div>
     <div class="panel-body">
@@ -126,9 +161,7 @@ td.text-right .btn { margin-left:6px; }
           </tr>
           <tr>
             <td>Detected client IP</td>
-            <td>
-              <span class="badge-chip" id="detected-ip"><?php echo htmlspecialchars($clientIp ?? 'unknown'); ?></span>
-            </td>
+            <td><span class="badge-chip" id="detected-ip"><?php echo htmlspecialchars($clientIp ?? 'unknown'); ?></span></td>
           </tr>
           <tr>
             <td>Actions</td>
@@ -175,9 +208,7 @@ td.text-right .btn { margin-left:6px; }
           <tbody id="my-tbody"></tbody>
           <tfoot>
           <tr>
-            <td colspan="6">
-              <span id="my-status" class="smallprint"></span>
-            </td>
+            <td colspan="6"><span id="my-status" class="smallprint"></span></td>
           </tr>
           </tfoot>
         </table>
@@ -187,7 +218,7 @@ td.text-right .btn { margin-left:6px; }
   <?php endif; ?>
 
   <?php if ($isAdmin): ?>
-  <!-- ADMIN: ACTIVE LEASES (full list; original view) -->
+  <!-- ADMIN: ACTIVE LEASES -->
   <div class="panel panel-modern" style="margin-top:22px;">
     <div class="panel-heading">
       <div class="header-inline">
@@ -217,8 +248,7 @@ td.text-right .btn { margin-left:6px; }
             <td colspan="6">
               <div class="control-line">
                 <label class="smallprint">Add IP (admin):</label>
-                <input id="manual-ip" type="text" class="form-control input-slim"
-                       placeholder="e.g. 203.0.113.7 or 2001:db8::1">
+                <input id="manual-ip" type="text" class="form-control input-slim" placeholder="e.g. 203.0.113.7 or 2001:db8::1">
                 <label class="smallprint" style="margin:0 6px 0 2px;">
                   <input id="manual-static" type="checkbox"> Static
                 </label>
@@ -255,5 +285,8 @@ td.text-right .btn { margin-left:6px; }
   };
 </script>
 <script src="lease_ui.js"></script>
+
+<!-- Reusable geo popup root (inserted once) -->
+<div id="lum-geo-pop" class="geo-pop" aria-hidden="true" role="dialog"></div>
 
 <?php render_footer(); ?>
