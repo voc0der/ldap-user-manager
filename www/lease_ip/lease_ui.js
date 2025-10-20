@@ -1,9 +1,9 @@
 (function () {
-  const clientIp = window.LEASE_IP.clientIp || null;
-  const isAdmin = !!window.LEASE_IP.isAdmin;
-  const API = '/lease_ip/api.php';
+  const clientIp = window.LEASE_IP?.clientIp || null;
+  const isAdmin  = !!window.LEASE_IP?.isAdmin;
+  const API      = '/lease_ip/api.php';
 
-  // === Fetch helpers =========================================================
+  // === Generic fetch helper (existing pattern) =================================
   const callOne = async (name, value, extraHeaders) => {
     const url = API + '?' + encodeURIComponent(name) + '=' + encodeURIComponent(value ?? '');
     const res = await fetch(url, {
@@ -16,7 +16,7 @@
     return data;
   };
 
-  // Shared utils --------------------------------------------------------------
+  // === Small utils =============================================================
   const nowMs = () => Date.now();
 
   const getTimestampMs = (ent) => {
@@ -49,13 +49,295 @@
     return out.trim();
   };
 
-  // === User quick actions ====================================================
+  // === Cyberpunk Geo Popover (admin-only attach, safe no-op for users) =========
+  const GeoUI = (() => {
+    // Config
+    const FRONT_TTL_MS = 600_000;   // 10 min (matches server cache)
+    const HOVER_DELAY  = 220;       // ms before opening on hover
+    const CLOSE_DELAY  = 180;       // ms after mouse leaves to close (if not pinned)
+
+    // State
+    const cache = new Map(); // ip -> { t:number, data:object } or { pending:Promise }
+    let styleInjected = false;
+    let popEl = null;
+    let arrowEl = null;
+    let pinned = false;
+    let hoverTimer = null;
+    let closeTimer = null;
+    let currentAnchor = null;
+    let currentIp = '';
+
+    // Utilities
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
+      { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+    ));
+
+    const injectStyle = () => {
+      if (styleInjected) return;
+      styleInjected = true;
+      const css = `
+#lum-geo-pop {
+  position: fixed; z-index: 99999; min-width: 280px; max-width: 520px;
+  background: radial-gradient(120% 140% at 0% 0%, rgba(42,139,220,0.25), rgba(18,24,32,0.96));
+  backdrop-filter: blur(2px);
+  border: 1px solid rgba(127,209,255,0.35);
+  box-shadow: 0 0 24px rgba(42,139,220,0.35), inset 0 0 20px rgba(255,255,255,0.04);
+  border-radius: 14px; padding: 10px 12px 12px 12px; color: #cfe9ff;
+}
+#lum-geo-pop .cg-head {
+  display:flex; align-items:center; gap:8px; margin-bottom:6px;
+  text-transform:uppercase; letter-spacing: .45px; font-size: 12px; color:#9fd1ff;
+}
+#lum-geo-pop .cg-ip { font-family: monospace; background:#102030; padding:2px 6px; border-radius: 8px; border:1px solid rgba(127,209,255,.35); color:#a9e1ff; }
+#lum-geo-pop .cg-grid {
+  display:grid; grid-template-columns: 128px 1fr; gap:6px 12px; font-size: 12.5px;
+}
+#lum-geo-pop .cg-key { color:#9fb6c9; text-transform:uppercase; letter-spacing:.3px; }
+#lum-geo-pop .cg-val { color:#e5f4ff; overflow-wrap:anywhere; }
+#lum-geo-pop .cg-bad { color:#ffb3b3; }
+#lum-geo-pop .cg-warn { color:#ffdf9a; }
+#lum-geo-pop .cg-flags { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+#lum-geo-pop .chip {
+  font-size: 11px; border-radius: 999px; padding:2px 8px; border:1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.04); color:#bfe9ff;
+}
+#lum-geo-pop .chip.negative { background: rgba(255,80,80,.12); border-color: rgba(255,80,80,.35); color:#ffdcdc; }
+#lum-geo-pop .chip.warn { background: rgba(255,200,60,.10); border-color: rgba(255,200,60,.35); color:#fff0cc; }
+#lum-geo-pop .cg-foot { margin-top:8px; display:flex; gap:8px; justify-content:flex-end; }
+#lum-geo-pop .btn-mini {
+  font-size: 11px; padding: 4px 8px; border-radius: 10px; background:#121820; color:#cfe9ff;
+  border:1px solid rgba(255,255,255,.12); cursor:pointer;
+}
+#lum-geo-pop .btn-mini:hover { background:#17202b; }
+.lum-ip-geo {
+  cursor: help; border-bottom: 1px dotted rgba(127,209,255,.65); color:#a9e1ff; text-decoration:none;
+}
+.lum-ip-geo:hover { color:#e9f7ff; }
+#lum-geo-arrow {
+  position: fixed; width: 0; height: 0; border: 8px solid transparent; z-index: 99998;
+  border-right-color: rgba(127,209,255,0.35);
+}
+@media (max-width: 480px) {
+  #lum-geo-pop { max-width: 90vw; }
+  #lum-geo-pop .cg-grid { grid-template-columns: 100px 1fr; }
+}`;
+      const style = document.createElement('style');
+      style.id = 'lum-geo-style';
+      style.textContent = css;
+      document.head.appendChild(style);
+    };
+
+    const ensureElems = () => {
+      if (popEl && arrowEl) return;
+      popEl = document.createElement('div');
+      popEl.id = 'lum-geo-pop';
+      popEl.style.display = 'none';
+      arrowEl = document.createElement('div');
+      arrowEl.id = 'lum-geo-arrow';
+      arrowEl.style.display = 'none';
+      document.body.appendChild(popEl);
+      document.body.appendChild(arrowEl);
+
+      // Global close handlers
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hide(true);
+      });
+      document.addEventListener('click', (e) => {
+        if (!pinned) return;
+        if (popEl && !popEl.contains(e.target) && currentAnchor && !currentAnchor.contains(e.target)) {
+          hide(true);
+        }
+      });
+      window.addEventListener('scroll', () => pinned ? positionTo(currentAnchor) : hide(false), true);
+      window.addEventListener('resize', () => pinned ? positionTo(currentAnchor) : hide(false));
+    };
+
+    const renderContent = (ip, payload) => {
+      const g = payload?.geo || {};
+      if (g.status && g.status !== 'success') {
+        popEl.innerHTML = `
+          <div class="cg-head"><span class="cg-ip">${esc(ip)}</span><span class="cg-bad">lookup failed</span></div>
+          <div class="cg-grid">
+            <div class="cg-key">Message</div><div class="cg-val cg-bad">${esc(g.message || 'Unknown error')}</div>
+          </div>
+        `;
+        return;
+      }
+
+      const locParts = [
+        g.city, g.regionName, g.countryCode ? `${g.country} (${g.countryCode})` : g.country, g.zip
+      ].filter(Boolean).join(' · ');
+      const asn = (g.asname || g.as || '').toString();
+
+      popEl.innerHTML = `
+        <div class="cg-head">
+          <span class="cg-ip">${esc(ip)}</span>
+          ${payload.cached ? '<span class="chip">cached</span>' : ''}
+        </div>
+        <div class="cg-grid">
+          <div class="cg-key">Location</div><div class="cg-val">${esc(locParts || '—')}</div>
+          <div class="cg-key">ISP</div><div class="cg-val">${esc(g.isp || '—')}</div>
+          <div class="cg-key">Org</div><div class="cg-val">${esc(g.org || '—')}</div>
+          <div class="cg-key">ASN</div><div class="cg-val">${esc(asn || '—')}</div>
+          <div class="cg-key">Timezone</div><div class="cg-val">${esc(g.timezone || '—')}</div>
+          <div class="cg-key">Reverse</div><div class="cg-val">${esc(g.reverse || '—')}</div>
+          <div class="cg-key">Coords</div><div class="cg-val">${(g.lat!=null&&g.lon!=null)? esc(g.lat+', '+g.lon) : '—'}</div>
+        </div>
+        <div class="cg-flags">
+          ${g.proxy ? '<span class="chip negative">proxy</span>' : ''}
+          ${g.hosting ? '<span class="chip warn">hosting/DC</span>' : ''}
+          ${g.mobile ? '<span class="chip warn">mobile</span>' : ''}
+          ${g.continent ? `<span class="chip">${esc(g.continentCode || '')} ${esc(g.continent)}</span>` : ''}
+          ${g.country ? `<span class="chip">${esc(g.country)}</span>` : ''}
+        </div>
+        <div class="cg-foot">
+          <button class="btn-mini" data-act="copy">Copy IP</button>
+          <button class="btn-mini" data-act="unpin">Close</button>
+        </div>
+      `;
+
+      // Footer actions
+      const copyBtn = popEl.querySelector('[data-act="copy"]');
+      const unpinBtn = popEl.querySelector('[data-act="unpin"]');
+      copyBtn?.addEventListener('click', async (e) => {
+        try { await navigator.clipboard.writeText(ip); copyBtn.textContent = 'Copied'; setTimeout(()=>copyBtn.textContent='Copy IP', 1200); } catch {}
+      });
+      unpinBtn?.addEventListener('click', () => hide(true));
+    };
+
+    const positionTo = (anchor) => {
+      if (!anchor || !popEl) return;
+      const r = anchor.getBoundingClientRect();
+      const vw = window.innerWidth, vh = window.innerHeight;
+
+      const pad = 10;
+      let left = r.right + 10;
+      let top  = r.top;
+
+      // If not enough space on right, show above/below or to the left
+      const preferredWidth = Math.min(popEl.offsetWidth || 420, 520);
+      if (left + preferredWidth + 16 > vw) {
+        // Try left
+        left = Math.max(pad, r.left - (preferredWidth + 18));
+        if (left < pad) left = Math.max(pad, vw - preferredWidth - pad);
+      }
+      if (top + (popEl.offsetHeight || 240) + 16 > vh) {
+        top = Math.max(pad, vh - (popEl.offsetHeight || 240) - pad);
+      }
+
+      popEl.style.left = Math.round(left) + 'px';
+      popEl.style.top  = Math.round(top)  + 'px';
+
+      // Arrow
+      const ar = 8;
+      arrowEl.style.top  = Math.round(r.top + Math.min(r.height/2, Math.max(ar+2, (popEl.offsetHeight||0)/3))) + 'px';
+      arrowEl.style.left = Math.round(Math.min(r.right + 2, left - ar)) + 'px';
+    };
+
+    const show = (anchor, ip, payloadPromise) => {
+      clearTimeout(closeTimer);
+      ensureElems();
+      currentAnchor = anchor;
+      currentIp = ip;
+      injectStyle();
+
+      popEl.style.display = 'block';
+      arrowEl.style.display = 'block';
+      positionTo(anchor);
+
+      payloadPromise.then((payload) => {
+        // Still same anchor/ip?
+        if (anchor !== currentAnchor || ip !== currentIp) return;
+        renderContent(ip, payload);
+        positionTo(anchor);
+      }).catch((err) => {
+        if (anchor !== currentAnchor || ip !== currentIp) return;
+        popEl.innerHTML = `
+          <div class="cg-head"><span class="cg-ip">${esc(ip)}</span><span class="cg-bad">lookup failed</span></div>
+          <div class="cg-grid"><div class="cg-key">Error</div><div class="cg-val cg-bad">${esc(err.message || 'Request error')}</div></div>`;
+      });
+    };
+
+    const hide = (force) => {
+      clearTimeout(closeTimer);
+      if (force) pinned = false;
+      if (pinned) return;
+      if (popEl) popEl.style.display = 'none';
+      if (arrowEl) arrowEl.style.display = 'none';
+      currentAnchor = null;
+      currentIp = '';
+    };
+
+    const callGeo = async (ip) => {
+      const hit = cache.get(ip);
+      const now = nowMs();
+      if (hit && hit.data && (now - hit.t < FRONT_TTL_MS)) {
+        return hit.data;
+      }
+      if (hit && hit.pending) return hit.pending;
+
+      const pending = fetch(API + '?geo=' + encodeURIComponent(ip), {
+        credentials: 'include',
+        headers: { 'Cache-Control': 'no-store' },
+      })
+        .then(async (res) => {
+          let j;
+          try { j = await res.json(); } catch { j = { ok:false, error:'Invalid JSON' }; }
+          if (!res.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + res.status));
+          const payload = { cached: !!j.cached, geo: j.geo || {} };
+          cache.set(ip, { t: now, data: payload });
+          return payload;
+        })
+        .finally(() => {
+          const h = cache.get(ip);
+          if (h && h.pending) cache.delete(ip); // clean pending marker; data write happens in then()
+        });
+
+      cache.set(ip, { pending });
+      return pending;
+    };
+
+    const attach = (el, ip) => {
+      if (!el || !ip) return;
+
+      // Styling for the anchor
+      el.classList.add('lum-ip-geo');
+
+      // Hover open (not pinned)
+      el.addEventListener('mouseenter', () => {
+        if (pinned) return;
+        clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(() => show(el, ip, callGeo(ip)), HOVER_DELAY);
+      });
+
+      // Hover leave -> schedule close
+      el.addEventListener('mouseleave', () => {
+        if (pinned) return;
+        clearTimeout(hoverTimer);
+        closeTimer = setTimeout(() => hide(false), CLOSE_DELAY);
+      });
+
+      // Click -> pin/unpin
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (pinned && currentAnchor === el) {
+          hide(true);
+          return;
+        }
+        pinned = true;
+        show(el, ip, callGeo(ip));
+      });
+    };
+
+    return { attach, hide };
+  })();
+
+  // === User quick actions (unchanged) ==========================================
   const userStatus = document.getElementById('user-status');
   const btnAdd = document.getElementById('btn-add');
   const btnDel = document.getElementById('btn-del');
   const setBusy = (el, busy) => el && (el.disabled = !!busy);
 
-  // We’ll set these to real functions only if the corresponding sections exist
   let refreshMine = null;
   let adminSoftRefresh = null;
 
@@ -83,10 +365,10 @@
     } finally { setBusy(btnDel, false); }
   });
 
-  // === "MY LEASES" (non-admins only; DOM won’t exist for admins) ============
+  // === "MY LEASES" (non-admins) ===============================================
   (function initMyLeasesIfPresent() {
     const myTbody = document.getElementById('my-tbody');
-    if (!myTbody) return; // Admins won’t have this section
+    if (!myTbody) return;
     const myCount = document.getElementById('my-count');
     const myRefreshBtn = document.getElementById('my-refresh');
     const myStatus = document.getElementById('my-status');
@@ -112,6 +394,7 @@
         tdTs.textContent = ent.timestamp || '';
 
         const tdIp = document.createElement('td');
+        // Show IP; for admins only we attach geo. For non-admin table we leave plain.
         tdIp.textContent = ent.ip || '';
         if (ent.static === true) tdIp.textContent += ' (static)';
 
@@ -223,15 +506,14 @@
     });
     myRefreshBtn?.addEventListener('click', () => refreshMine({ force: true }));
 
-    // Kickoff for non-admins
     refreshMine({ force: true });
     startMyPoller();
   })();
 
-  // === Admin live list (only runs when admin table exists) ===================
+  // === Admin live list (adds GeoUI on IP cells) ================================
   (function initAdminIfPresent() {
     const tbody = document.getElementById('tbody');
-    if (!tbody) return; // Non-admins won’t have this section
+    if (!tbody) return;
 
     const count = document.getElementById('count');
     const btnRefresh = document.getElementById('btn-refresh');
@@ -243,7 +525,7 @@
     const manualStatic = document.getElementById('manual-static');
     const btnAddManual = document.getElementById('btn-add-manual');
 
-    let currentEntries = [];          // <<< keep last fetched list
+    let currentEntries = [];
     let lastHash = '';
     let lastEtag = '';
     let pollTimer = null;
@@ -275,8 +557,31 @@
         tdTs.textContent = ent.timestamp || '';
 
         const tdIp = document.createElement('td');
-        tdIp.textContent = ent.ip || '';
-        if (ent.static === true) tdIp.textContent += ' (static)';
+        // Make the IP clickable with geo popup for admins
+        if (ent.ip) {
+          const ipSpan = document.createElement('a');
+          ipSpan.href = '#';
+          ipSpan.textContent = ent.ip + (ent.static === true ? ' (static)' : '');
+          // Keep the "(static)" text but only attach geo on the IP part
+          if (ent.static === true) {
+            // Slightly better: split into two spans so the underline applies to the IP only
+            const ipOnly = document.createElement('a');
+            ipOnly.href = '#';
+            ipOnly.textContent = ent.ip;
+            ipOnly.style.marginRight = '4px';
+            tdIp.appendChild(ipOnly);
+            const st = document.createElement('span');
+            st.textContent = '(static)';
+            st.style.opacity = '0.8';
+            st.style.marginLeft = '2px';
+            if (isAdmin) GeoUI.attach(ipOnly, ent.ip);
+          } else {
+            tdIp.appendChild(ipSpan);
+            if (isAdmin) GeoUI.attach(ipSpan, ent.ip);
+          }
+        } else {
+          tdIp.textContent = '';
+        }
 
         const tdExp = document.createElement('td');
         let expText = '—';
@@ -372,7 +677,7 @@
       if (!entries) return false;
       const h = hashEntries(entries);
       if (!force && h === lastHash) return false;
-      currentEntries = entries;               // <<< keep copy for TTL re-render
+      currentEntries = entries;
       lastHash = h;
       renderRows(currentEntries);
       return true;
@@ -388,7 +693,6 @@
         if (etag) lastEtag = etag;
 
         if (notModified) {
-          // No data change; still keep the table (currentEntries) as-is
           setStatus(`Up to date · ${new Date().toLocaleTimeString()}`);
         } else {
           const changed = applyEntriesIfChanged(entries, { force });
@@ -411,7 +715,6 @@
     function startCountdownTicker() {
       if (countdownTimer) clearInterval(countdownTimer);
       countdownTimer = setInterval(() => {
-        // Re-render current entries to refresh remaining TTL text — DO NOT clear table
         if (currentEntries && currentEntries.length) renderRows(currentEntries);
       }, COUNTDOWN_TICK_MS);
     }
