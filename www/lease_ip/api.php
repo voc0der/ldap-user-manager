@@ -91,7 +91,7 @@ function fetch_entries(string $apiBase, array $headers): array {
 }
 
 // ---- Operation selection ----
-$allowed = ['list','clear','add','delete','prune'];
+$allowed = ['list','clear','add','delete','prune','geo']; // <— added geo
 $getKeys = array_keys($_GET ?? []);
 $opKeys  = array_values(array_diff($getKeys, ['user']));  // allow ?user=
 if (count($opKeys) !== 1) {
@@ -116,6 +116,62 @@ $headers = [
     'X-IP-Lease-Label: ' . $userId,   // upstream still expects "Label" header; UI shows it as "User"
     'X-IP-Lease-Source: LUM',
 ];
+
+// ---- GEO lookup (server-side proxy for ip-api.com) --------------------------
+if ($key === 'geo') {
+    if (!$isAdmin) { http_response_code(403); echo json_encode(['ok'=>false,'error'=>'Admin required']); exit; }
+    $ip = canon_ip($val);
+    if (!$ip) { http_response_code(400); echo json_encode(['ok'=>false,'error'=>'Invalid IP']); exit; }
+
+    $CACHE_DIR = sys_get_temp_dir() . '/lum_geo_cache';
+    $TTL_SEC   = 600; // 10 minutes
+    if (!is_dir($CACHE_DIR)) @mkdir($CACHE_DIR, 0700, true);
+    $ckey = $CACHE_DIR . '/' . sha1($ip) . '.json';
+
+    if (is_file($ckey) && (time() - filemtime($ckey) < $TTL_SEC)) {
+        $cached = @file_get_contents($ckey);
+        $j = json_decode((string)$cached, true);
+        if (is_array($j)) { echo json_encode(['ok'=>true,'geo'=>$j,'cached'=>true]); exit; }
+    }
+
+    // Free plan is HTTP only; we proxy server-side to avoid mixed-content in browser.
+    $fields = implode(',', [
+        'status','message','query',
+        'continent','continentCode','country','countryCode',
+        'region','regionName','city','zip',
+        'lat','lon','timezone',
+        'isp','org','as','asname','reverse',
+        'mobile','proxy','hosting','currency','offset'
+    ]);
+    $url = 'http://ip-api.com/json/' . rawurlencode($ip) . '?fields=' . rawurlencode($fields);
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_TIMEOUT => 6,
+        CURLOPT_USERAGENT => 'LUM-Geo/1.0',
+    ]);
+    $resp = curl_exec($ch);
+    $err  = curl_error($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($resp === false || $code < 200 || $code >= 300) {
+        http_response_code(502);
+        echo json_encode(['ok'=>false,'error'=>'Geo upstream failed: '.$err,'status'=>$code]);
+        exit;
+    }
+    $data = json_decode($resp, true);
+    if (!is_array($data)) { echo json_encode(['ok'=>false,'error'=>'Bad JSON from ip-api']); exit; }
+
+    // Cache & return
+    @file_put_contents($ckey, json_encode($data, JSON_UNESCAPED_SLASHES));
+    echo json_encode(['ok'=>true, 'geo'=>$data, 'cached'=>false]);
+    exit;
+}
 
 // ---- Permissions & effective IP/hours ----
 $effectiveIp = null;
