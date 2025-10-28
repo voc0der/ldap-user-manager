@@ -158,7 +158,7 @@ $clientIp = get_client_ip() ?: '0.0.0.0';
 $isV4     = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 
 $lanCidrs = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
-$inLan    = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
+$inLanRfc1918   = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
 
 $vpnSpec  = getenv('VPN_CIDR') ?: '10.20.40.0/24';
 $vpnCidrs = parse_cidr_list($vpnSpec);
