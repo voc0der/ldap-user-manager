@@ -160,9 +160,12 @@ $isV4     = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 $lanCidrs = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
 $inLan    = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
 
-$vpnSpec  = getenv('VPN_CIDR') ?: '10.2.4.0/24';
+$vpnSpec  = getenv('VPN_CIDR') ?: '10.20.40.0/24';
 $vpnCidrs = parse_cidr_list($vpnSpec);
 $onVpn    = $isV4 && !empty($vpnCidrs) && ip_in_any_cidr($clientIp, $vpnCidrs);
+
+// Final LAN = RFC1918 but NOT in VPN ranges
+$inLan    = $inLanRfc1918 && !$onVpn;
 
 $mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
 $usingMtls    = in_array($mtlsHeader, ['on','1','true'], true);
@@ -226,7 +229,7 @@ $sourceTag = 'LUM Iframe';
 
 /* -------- AllowedIPs base + external -------- */
 $wgBaseSpec = getenv('WG_ALLOWEDIPS')
-  ?: '10.2.4.1/32, 10.2.4.2/32, 10.2.10.10/32, 10.2.10.20/32';
+  ?: '10.20.40.1/32, 10.20.40.2/32, 10.20.10.10/32, 10.20.10.20/32';
 $wgBaseList = parse_cidr_list($wgBaseSpec);
 
 $extIPv4   = detect_public_ipv4($hostNow);
@@ -369,7 +372,7 @@ elseif ($format === 'iframe') {
               </button>
               <template id="vpnHelpTpl">
                 <div>
-                  <b>Add this to AllowedIPs</b><br/>
+                  <b>Add this to AllowedIPs on VPN profile</b><br/>
                   <?php echo $baseHtml . $appendHtml; ?>
                 </div>
               </template>
