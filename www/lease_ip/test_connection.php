@@ -1,5 +1,10 @@
 <?php
 declare(strict_types=1);
+/*
+  LUM Connection Tester (drop-in)
+  - Base AllowedIPs from env WG_ALLOWEDIPS
+  - External/WAN IPv4 autodetect (env override WG_EXTERNAL_IPV4), cached 15m in /tmp/lum_public_ipv4.json
+*/
 require_once __DIR__ . '/../includes/web_functions.inc.php';
 set_page_access('auth');
 
@@ -20,7 +25,9 @@ function canon_ip(?string $ip): ?string {
 }
 function get_client_ip(): ?string {
     $candidates = [];
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $p) $candidates[] = trim($p);
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $p) $candidates[] = trim($p);
+    }
     if (!empty($_SERVER['HTTP_X_REAL_IP'])) $candidates[] = trim($_SERVER['HTTP_X_REAL_IP']);
     if (!empty($_SERVER['REMOTE_ADDR']))    $candidates[] = trim($_SERVER['REMOTE_ADDR']);
     foreach ($candidates as $v) if ($v = canon_ip($v)) return $v;
@@ -55,6 +62,76 @@ function parse_cidr_list(string $spec): array {
     if ($spec === '') return [];
     $parts = preg_split('/[,\s;]+/', $spec, -1, PREG_SPLIT_NO_EMPTY);
     return array_values(array_unique(array_map('trim', $parts)));
+}
+function is_public_ipv4(string $ip): bool {
+    return (bool)filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+}
+function curl_quick_text(string $url, int $connectTO=2, int $totalTO=3): ?string {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => $connectTO,
+        CURLOPT_TIMEOUT        => $totalTO,
+        CURLOPT_USERAGENT      => 'LUM-ConnTest/1.2',
+        CURLOPT_HEADER         => false,
+    ]);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
+    curl_close($ch);
+    if ($resp === false || $code < 200 || $code >= 300) return null;
+    return (string)$resp;
+}
+function detect_public_ipv4(?string $hostForDns = null): ?string {
+    // 1) Env overrides
+    foreach (['WG_EXTERNAL_IPV4','PUBLIC_IPV4','SERVER_PUBLIC_IP'] as $k) {
+        $v = getenv($k);
+        if ($v && is_public_ipv4($v)) return $v;
+    }
+    // 2) Cached result
+    $cacheFile = '/tmp/lum_public_ipv4.json';
+    $now = time();
+    if (is_readable($cacheFile)) {
+        $raw = @file_get_contents($cacheFile);
+        if ($raw) {
+            $j = @json_decode($raw, true);
+            if (is_array($j) && !empty($j['ip']) && !empty($j['ts']) && ($now - (int)$j['ts'] < 900)) {
+                if (is_public_ipv4($j['ip'])) return $j['ip'];
+            }
+        }
+    }
+    // 3) HTTP probes (IPv4 endpoints)
+    $candidates = [];
+    // Cloudflare trace (fast, stable)
+    $t = curl_quick_text('https://1.1.1.1/cdn-cgi/trace');
+    if ($t && preg_match('/^ip=([0-9.]+)$/m', $t, $m) && is_public_ipv4($m[1])) $candidates[] = $m[1];
+    // ipify
+    $t = $t ?: null; // no-op
+    $r = curl_quick_text('https://api.ipify.org');
+    if ($r) {
+        $r = trim($r);
+        if (is_public_ipv4($r)) $candidates[] = $r;
+    }
+    // icanhazip
+    $r = curl_quick_text('https://ipv4.icanhazip.com');
+    if ($r) {
+        $r = trim($r);
+        if (is_public_ipv4($r)) $candidates[] = $r;
+    }
+    // ifconfig.me
+    $r = curl_quick_text('https://ifconfig.me/ip');
+    if ($r) {
+        $r = trim($r);
+        if (is_public_ipv4($r)) $candidates[] = $r;
+    }
+    // 4) DNS A of current host (last resort; beware CDN)
+    if ($hostForDns) {
+        $a = @gethostbyname($hostForDns);
+        if ($a && $a !== $hostForDns && is_public_ipv4($a)) $candidates[] = $a;
+    }
+    $ip = $candidates[0] ?? null;
+    if ($ip) @file_put_contents($cacheFile, json_encode(['ip'=>$ip, 'ts'=>$now]));
+    return $ip ?: null;
 }
 function http_request(string $url, string $method='GET', ?string $body=null, array $headers=[]): array {
     $ch = curl_init($url);
@@ -169,6 +246,12 @@ if ($wlOk && isset($wlPayload['entries']) && is_array($wlPayload['entries'])) {
 $allNo     = (!$inLan && !$onVpn && !$usingMtls && !$isWhitelisted);
 $sourceTag = 'LUM Iframe';
 
+/* -------- AllowedIPs base + external -------- */
+$wgBaseSpec  = getenv('WG_ALLOWEDIPS') ?: '10.2.4.1/32, 10.2.4.2/32, 10.2.10.10/32, 10.2.10.20/32';
+$wgBaseList  = parse_cidr_list($wgBaseSpec);
+$extIPv4     = detect_public_ipv4($hostNow);
+$extCIDR     = $extIPv4 ? ($extIPv4 . '/32') : null;
+
 if (isset($_GET['do']) && $_GET['do'] === 'lease') {
     $target = $base . (strpos($base,'?')!==false ? '&' : '?') . 'add=' . rawurlencode($clientIp);
     $headers = [
@@ -214,7 +297,9 @@ if ($format === 'json') {
             'err'   => $wlOk ? null : $wlErr,
             'match' => $wlMatch,
         ],
-        'vpn_cidrs' => $vpnCidrs,
+        'vpn_cidrs'       => $vpnCidrs,
+        'allowedips_base' => $wgBaseList,
+        'external_ipv4'   => $extIPv4,
         'ts' => date('Y-m-d H:i:s T'),
     ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
@@ -226,8 +311,25 @@ elseif ($format === 'iframe') {
     $showMtlsRow   = empty($filterKeys) || isset($filterKeys['mtls']);
     $showLeasedRow = empty($filterKeys) || isset($filterKeys['leased']);
 
+    // Show helper if every rendered check is ❌ (and at least one row is shown)
+    $flagsRendered = 0; $flagsNo = 0;
+    if ($showLanRow)    { $flagsRendered++; if (!$inLan)         $flagsNo++; }
+    if ($showVpnRow)    { $flagsRendered++; if (!$onVpn)         $flagsNo++; }
+    if ($showMtlsRow)   { $flagsRendered++; if (!$usingMtls)     $flagsNo++; }
+    if ($showLeasedRow) { $flagsRendered++; if (!$isWhitelisted) $flagsNo++; }
+    $allRenderedNo = ($flagsRendered > 0 && $flagsRendered === $flagsNo);
+
     header('Content-Type: text/html; charset=utf-8');
     $selfLeaseUrl = $_SERVER['PHP_SELF'] . '?format=iframe&do=lease&lease_url=' . rawurlencode($base);
+
+    // Prebuild HTML for the AllowedIPs list
+    $baseHtml = '';
+    if (!empty($wgBaseList)) {
+        $bits = [];
+        foreach ($wgBaseList as $c) $bits[] = '<code>'.h($c).'</code>';
+        $baseHtml = implode(', ', $bits);
+    }
+    $extHtml = $extCIDR ? ', <code><u>'.h($extCIDR).'</u></code>' : ' <em>(auto-detect failed)</em>';
     ?>
     <!doctype html>
     <html>
@@ -235,7 +337,6 @@ elseif ($format === 'iframe') {
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <style>
-        /* Correct color tokens: default = dark theme; light overrides below */
         :root {
           --fg:#e5e7eb; --muted:#94a3b8; --card:#0b0f13; --border:rgba(255,255,255,.08);
           --glow:rgba(127,209,255,.35); --line:rgba(127,209,255,.45);
@@ -246,7 +347,6 @@ elseif ($format === 'iframe') {
             --glow:rgba(0,123,255,.25); --line:rgba(0,123,255,.45);
           }
         }
-
         *{box-sizing:border-box}
         body{margin:0; background:transparent; color:var(--fg); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial}
         .micro{padding:10px 12px; border-radius:12px; background:var(--card); border:1px solid var(--border); overflow:visible;}
@@ -263,21 +363,15 @@ elseif ($format === 'iframe') {
           .btn:hover,.btn:active{ background:rgba(0,123,255,.22); }
         }
         .btn[aria-busy="true"]{opacity:.7; pointer-events:none}
-
-        /* Compact neon info icon */
         .tip{
           position:relative; display:inline-flex; align-items:center; justify-content:center;
-          width:16px; height:16px; border-radius:50%; font-size:11px; line-height:1; font-weight:700;
+          min-width:16px; height:16px; border-radius:50%; font-size:11px; line-height:1; font-weight:700;
           background: radial-gradient(circle at 30% 30%, rgba(127,209,255,.22), rgba(127,209,255,.06) 60%), rgba(15,20,28,.72);
           color:#d6f1ff; border:1px solid var(--line);
           box-shadow: 0 0 8px var(--glow), inset 0 0 6px rgba(127,209,255,.15);
           cursor:pointer; outline:none; user-select:none; touch-action:manipulation;
         }
-        @media (max-width:480px){
-          .tip{ width:18px; height:18px; font-size:12px; }
-        }
-
-        /* JS-positioned bubble kept within iframe viewport */
+        @media (max-width:480px){ .tip{ min-width:18px; height:18px; font-size:12px; } }
         #tipBubble, #tipArrow{ position:fixed; z-index:2147483646; }
         #tipBubble{
           max-width:min(90vw, 320px); padding:10px 12px; border-radius:10px;
@@ -285,15 +379,52 @@ elseif ($format === 'iframe') {
           box-shadow: 0 10px 28px var(--glow), 0 0 14px rgba(0,180,255,.18);
           font-size:12px; letter-spacing:.2px; white-space:normal; text-align:left;
         }
-        @media (prefers-color-scheme: light){
-          #tipBubble{ background:#0b1a2a; color:#d9f1ff; }
-        }
+        @media (prefers-color-scheme: light){ #tipBubble{ background:#0b1a2a; color:#d9f1ff; } }
         #tipArrow{ width:0; height:0; filter: drop-shadow(0 0 4px var(--glow)); }
         .hidden{ display:none !important; }
       </style>
     </head>
     <body>
       <div class="micro">
+
+        <?php if ($allRenderedNo): ?>
+          <div class="row">
+            <span class="label">Connection help</span>
+            <span class="val">
+              <a class="btn tip" id="vpnHelpBtn" href="#" role="button"
+                 aria-label="VPN help"
+                 aria-haspopup="true" aria-expanded="false"
+                 data-tip-template="vpnHelpTpl">I’m on the VPN!</a>
+            </span>
+          </div>
+
+          <template id="vpnHelpTpl">
+            <div>
+              <strong>Think you’re on the VPN?</strong>
+              <div style="margin:6px 0 4px;">
+                Old WireGuard profiles may be missing
+                <span style="font-weight:700; text-decoration:underline;">
+                  <?php echo h(', ' . ($extCIDR ?: 'x.x.x.x/32')); ?>
+                </span>
+                in <em>AllowedIPs</em>.
+              </div>
+
+              <div style="display:grid; grid-template-columns:auto 1fr; gap:4px 8px; margin:6px 0 2px;">
+                <div style="opacity:.8;">Use:</div>
+                <div>
+                  <?php echo $baseHtml; ?>
+                  <?php echo $extCIDR ? $extHtml : ''; ?>
+                </div>
+              </div>
+
+              <div style="opacity:.9; margin-top:6px;">
+                WireGuard → Peer → <b>Allowed IPs</b> → append
+                <code><u><?php echo h(', ' . ($extCIDR ?: 'x.x.x.x/32')); ?></u></code>.
+              </div>
+            </div>
+          </template>
+        <?php endif; ?>
+
         <?php if ($showLanRow): ?>
         <div class="row">
           <span class="label">
@@ -367,7 +498,6 @@ elseif ($format === 'iframe') {
       </script>
       <?php endif; ?>
 
-      <!-- Tooltip bubble (viewport-clamped) -->
       <div id="tipBubble" class="hidden" role="dialog" aria-live="polite"></div>
       <div id="tipArrow"  class="hidden" aria-hidden="true"></div>
 
@@ -376,10 +506,7 @@ elseif ($format === 'iframe') {
           var openEl = null;
           var bubble  = document.getElementById('tipBubble');
           var arrow   = document.getElementById('tipArrow');
-          var margin  = 8;   // viewport margin
-          var gap     = 8;   // distance between icon and bubble
-          var aSize   = 7;   // arrow size
-          var hoverTO = null;
+          var margin  = 8, gap = 8, aSize = 7, hoverTO = null;
 
           function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
 
@@ -388,15 +515,23 @@ elseif ($format === 'iframe') {
             var vw = Math.max(document.documentElement.clientWidth,  window.innerWidth  || 0);
             var vh = Math.max(document.documentElement.clientHeight, window.innerHeight || 0);
 
-            bubble.textContent = el.getAttribute('data-tip') || '';
+            var html = '';
+            var tplId = el.getAttribute('data-tip-template');
+            if (tplId) {
+              var tpl = document.getElementById(tplId);
+              html = tpl ? tpl.innerHTML : '';
+            } else if (el.hasAttribute('data-tip-html')) {
+              html = el.getAttribute('data-tip-html') || '';
+            }
+            if (html) bubble.innerHTML = html; else bubble.textContent = el.getAttribute('data-tip') || '';
+
             bubble.classList.remove('hidden');
             arrow.classList.remove('hidden');
 
             var bw = bubble.offsetWidth, bh = bubble.offsetHeight;
             var cx = r.left + r.width/2;
 
-            var top = r.top - gap - bh;
-            var placeTop = true;
+            var top = r.top - gap - bh, placeTop = true;
             if (top < margin){ top = r.bottom + gap; placeTop = false; }
 
             var left = clamp(cx - bw/2, margin, vw - bw - margin);
@@ -431,38 +566,24 @@ elseif ($format === 'iframe') {
             arrow.classList.add('hidden');
           }
 
-          function open(el){
-            if (openEl === el){ close(); return; }
-            openEl = el;
-            place(el);
-          }
+          function open(el){ if (openEl === el){ close(); } else { openEl = el; place(el); } }
 
-          // Tap/click: support label taps (easier on mobile) and the icon
           function handleOpenFromEvent(ev){
             var tip = ev.target.closest('.tip');
             if (!tip){
               var label = ev.target.closest('.label');
               if (label) tip = label.querySelector('.tip');
             }
-            if (tip){
-              ev.preventDefault();
-              open(tip);
-            } else {
-              close();
-            }
+            if (tip){ ev.preventDefault(); open(tip); } else { close(); }
           }
 
-          // Pointer & touch (mobile reliable)
           document.addEventListener('pointerup', handleOpenFromEvent, {passive:false});
           document.addEventListener('touchend',  handleOpenFromEvent, {passive:false});
           document.addEventListener('click',     handleOpenFromEvent, {passive:false});
 
-          // Hover (desktop)
           document.addEventListener('mouseover', function(ev){
-            var t = ev.target.closest('.tip');
-            if (!t) return;
-            clearTimeout(hoverTO);
-            open(t);
+            var t = ev.target.closest('.tip'); if (!t) return;
+            clearTimeout(hoverTO); open(t);
           });
           document.addEventListener('mouseout', function(ev){
             if (ev.target && ev.target.closest && ev.target.closest('.tip')){
@@ -470,16 +591,15 @@ elseif ($format === 'iframe') {
             }
           });
 
-          // Keyboard support
           document.addEventListener('keydown', function(ev){
             if (ev.key === 'Escape'){ close(); }
-            if ((ev.key === 'Enter' || ev.key === ' ') && document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('tip')){
-              ev.preventDefault();
-              open(document.activeElement);
+            if ((ev.key === 'Enter' || ev.key === ' ') &&
+                document.activeElement && document.activeElement.classList &&
+                document.activeElement.classList.contains('tip')){
+              ev.preventDefault(); open(document.activeElement);
             }
           });
 
-          // Re-clamp on resize/scroll
           window.addEventListener('resize', function(){ if (openEl) place(openEl); });
           window.addEventListener('scroll', function(){ if (openEl) place(openEl); }, {passive:true});
           window.addEventListener('blur', close);
@@ -507,23 +627,19 @@ if (!$showMenu) {
   padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.08);
 }
 .panel-modern .panel-body { padding:14px; }
-
 .table-modern { margin:0; }
 .table-modern>thead>tr>th,
 .table-modern>tbody>tr>td,
 .table-modern tfoot td { border-color: rgba(255,255,255,.08); }
-
 .table-modern>thead>tr>th {
   color:#9fb6c9; font-size:12px; text-transform:uppercase; letter-spacing:.35px; border-bottom-width:1px;
 }
 .table-modern.table-striped>tbody>tr:nth-of-type(odd)  { background: rgba(255,255,255,.03); }
 .table-modern.table-striped>tbody>tr:nth-of-type(even) { background: rgba(255,255,255,.015); }
 .table-modern>tbody>tr:hover td { background: rgba(255,255,255,.06); }
-
 .key { color:#e2f1ff; font-weight:700; letter-spacing:.2px; }
 .badge-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-family:monospace; font-size:.98em;
   background:#1a2b3a; color:#a9e1ff; border:1px solid rgba(127,209,255,.35); }
-
 .smallprint { color:#8aa0b2; font-size:12px; }
 .flag-yes { color:#10b981; font-weight:700; }
 .flag-no  { color:#ef4444; font-weight:700; }
@@ -531,7 +647,6 @@ if (!$showMenu) {
 .kv + .kv { margin-top:8px; }
 .hint { margin-top:10px; }
 hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
-
 @media (max-width: 768px) {
   .panel-modern .panel-body { padding:12px; }
   .table-modern>tbody>tr>td { padding:10px 8px; }
@@ -587,6 +702,7 @@ hr.soft { border:0; border-top:1px solid rgba(255,255,255,.08); margin:12px 0; }
         <?php if ($isAdmin): ?>
           &nbsp;•&nbsp; VPN CIDR(s): <code><?php echo h(implode(', ', $vpnCidrs) ?: '—'); ?></code>
           &nbsp;•&nbsp; Lease API: <code><?php echo h($leaseUrl); ?></code>
+          &nbsp;•&nbsp; Ext IPv4: <code><?php echo h($extIPv4 ?: 'n/a'); ?></code>
         <?php endif; ?>
       </div>
 
