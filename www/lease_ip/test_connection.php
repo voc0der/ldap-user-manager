@@ -81,10 +81,12 @@ function curl_quick_text(string $url, int $connectTO=2, int $totalTO=3): ?string
     return (string)$resp;
 }
 function detect_public_ipv4(?string $hostForDns = null): ?string {
+    // 1) Env overrides
     foreach (['WG_EXTERNAL_IPV4','PUBLIC_IPV4','SERVER_PUBLIC_IP'] as $k) {
         $v = getenv($k);
         if ($v && is_public_ipv4($v)) return $v;
     }
+    // 2) Cache (15m)
     $cacheFile = '/tmp/lum_public_ipv4.json';
     $now = time();
     if (is_readable($cacheFile)) {
@@ -96,12 +98,14 @@ function detect_public_ipv4(?string $hostForDns = null): ?string {
             }
         }
     }
+    // 3) HTTP probes (IPv4)
     $candidates = [];
     $t = curl_quick_text('https://1.1.1.1/cdn-cgi/trace');
     if ($t && preg_match('/^ip=([0-9.]+)$/m', $t, $m) && is_public_ipv4($m[1])) $candidates[] = $m[1];
-    $r = curl_quick_text('https://api.ipify.org'); if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
-    $r = curl_quick_text('https://ipv4.icanhazip.com'); if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
-    $r = curl_quick_text('https://ifconfig.me/ip'); if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
+    $r = curl_quick_text('https://api.ipify.org');         if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
+    $r = curl_quick_text('https://ipv4.icanhazip.com');    if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
+    $r = curl_quick_text('https://ifconfig.me/ip');        if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
+    // 4) DNS A of current host (last resort)
     if ($hostForDns) { $a = @gethostbyname($hostForDns); if ($a && $a !== $hostForDns && is_public_ipv4($a)) $candidates[] = $a; }
     $ip = $candidates[0] ?? null;
     if ($ip) @file_put_contents($cacheFile, json_encode(['ip'=>$ip, 'ts'=>$now]));
@@ -228,6 +232,28 @@ $wgBaseList = parse_cidr_list($wgBaseSpec);
 $extIPv4   = detect_public_ipv4($hostNow);
 $extCIDR   = $extIPv4 ? ($extIPv4 . '/32') : null;
 
+/* Handle inline lease API call */
+if (isset($_GET['do']) && $_GET['do'] === 'lease') {
+    $target = $base . (strpos($base,'?')!==false ? '&' : '?') . 'add=' . rawurlencode($clientIp);
+    $headers = [
+        'Accept: application/json',
+        'X-IP-Lease-Label: '  . $username,
+        'X-IP-Lease-Source: ' . $sourceTag,
+        'X-Forwarded-For: '   . $clientIp,
+    ];
+    [$ok, $code, $err, $body] = http_request($target, 'GET', null, $headers);
+    error_log(sprintf('LUM-ConnTest: lease GET %s http=%d ok=%d', $target, (int)$code, $ok?1:0));
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'ok'     => $ok,
+        'http'   => $code,
+        'err'    => $ok ? null : $err,
+        'target' => $target,
+        'body'   => substr($body ?? '', 0, 256),
+    ], JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 /* -------------------- render -------------------- */
 if ($format === 'json') {
     header('Content-Type: application/json; charset=utf-8');
@@ -243,7 +269,7 @@ if ($format === 'json') {
         ],
         'mtls' => ['header'=>$mtlsHeader ?: null, 'detected'=>$usingMtls],
         'lease_api' => ['url'=>$leaseUrl, 'ok'=>$wlOk, 'http'=>$wlHttp, 'err'=>$wlOk?null:$wlErr, 'match'=>$wlMatch],
-        'vpn_cidrs' => $vpnCidrs,
+        'vpn_cidrs'       => $vpnCidrs,
         'allowedips_base' => $wgBaseList,
         'external_ipv4'   => $extIPv4,
         'ts' => date('Y-m-d H:i:s T'),
@@ -257,6 +283,7 @@ elseif ($format === 'iframe') {
     $showMtlsRow    = empty($filterKeys) || isset($filterKeys['mtls']);
     $showLeasedRow  = empty($filterKeys) || isset($filterKeys['leased']);
 
+    // Show Troubleshoot chip only if all rendered are ❌ and VPN is ❌
     $flagsRendered = 0; $flagsNo = 0;
     if ($showLanRow)    { $flagsRendered++; if (!$inLan)         $flagsNo++; }
     if ($showVpnRow)    { $flagsRendered++; if (!$onVpn)         $flagsNo++; }
@@ -267,10 +294,9 @@ elseif ($format === 'iframe') {
     header('Content-Type: text/html; charset=utf-8');
     $selfLeaseUrl = $_SERVER['PHP_SELF'] . '?format=iframe&do=lease&lease_url=' . rawurlencode($base);
 
-    // Prebuild compact HTML chunks
-    $baseHtml = implode(', ', array_map(fn($c)=>'<code>'.h($c).'</code>', $wgBaseList));
+    // Prebuild compact HTML for bubble
+    $baseHtml   = implode(', ', array_map(fn($c)=>'<code>'.h($c).'</code>', $wgBaseList));
     $appendHtml = $extCIDR ? ', <code><u>'.h($extCIDR).'</u></code>' : ', <code><u>x.x.x.x/32</u></code>';
-    $wanHtml = $extIPv4 ? '<code>'.h($extIPv4).'</code>' : '<em>unknown</em>';
     ?>
     <!doctype html>
     <html>
@@ -285,7 +311,7 @@ elseif ($format === 'iframe') {
         .micro{padding:10px 12px; border-radius:12px; background:var(--card); border:1px solid var(--border); overflow:visible;}
         .row{display:flex; justify-content:space-between; align-items:center; padding:8px 0}
         .row+.row{border-top:1px solid var(--border)}
-        .label{font-weight:600; letter-spacing:.2px; display:inline-flex; align-items:center; gap:6px;}
+        .label{font-weight:600; letter-spacing:.2px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;}
         .yes,.no{font-weight:700}
         .val{display:inline-flex; align-items:center; gap:6px;}
         .btn{display:inline-block; text-decoration:none; line-height:1; padding:8px 12px; border-radius:9px; font-weight:700; cursor:pointer; user-select:none; -webkit-tap-highlight-color:transparent;}
@@ -299,7 +325,12 @@ elseif ($format === 'iframe') {
           box-shadow: 0 0 6px var(--glow), inset 0 0 6px rgba(127,209,255,.15);
           cursor:pointer; outline:none; user-select:none; touch-action:manipulation;
         }
-        .mini{min-width:14px; height:14px; font-size:10px; margin-left:4px;}
+        .helpchip{
+          display:inline-flex; align-items:center; gap:4px; margin-left:4px;
+          padding:2px 6px; border-radius:8px; font-size:11px; line-height:1.2; font-weight:700;
+          background:rgba(127,209,255,.12); border:1px solid var(--line); color:#d6f1ff;
+        }
+        .helpchip .q{ width:14px; height:14px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:800; }
         #tipBubble, #tipArrow{ position:fixed; z-index:2147483646; }
         #tipBubble{
           max-width:min(90vw, 260px); padding:8px 9px; border-radius:10px;
@@ -330,20 +361,22 @@ elseif ($format === 'iframe') {
             On VPN
             <span class="tip" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"
               data-tip="<?php echo h('True if your client IP is within VPN_CIDR range(s).'); ?>">i</span>
-          </span>
-          <span class="val">
-            <span class="<?php echo $onVpn ? 'yes' : 'no'; ?>"><?php echo $onVpn ? '✅' : '❌'; ?></span>
+
             <?php if (!$onVpn && $allRenderedNo): ?>
-              <!-- Inline mini help next to the status icon -->
-              <button type="button" class="tip mini" aria-label="Fix VPN" data-tip-template="vpnHelpTpl">?</button>
+              <!-- Inline micro Troubleshoot chip, next to info icon -->
+              <button type="button" class="helpchip tip" aria-label="Troubleshoot VPN" data-tip-template="vpnHelpTpl">
+                Troubleshoot <span class="q">?</span>
+              </button>
               <template id="vpnHelpTpl">
                 <div>
-                  <b>Fix “On VPN” = ❌</b><br/>
-                  AllowedIPs → <?php echo $baseHtml; ?><?php echo $appendHtml; ?><br/>
-                  WAN: <?php echo $wanHtml; ?>
+                  <b>Add this to AllowedIPs</b><br/>
+                  <?php echo $baseHtml . $appendHtml; ?>
                 </div>
               </template>
             <?php endif; ?>
+          </span>
+          <span class="val">
+            <span class="<?php echo $onVpn ? 'yes' : 'no'; ?>"><?php echo $onVpn ? '✅' : '❌'; ?></span>
           </span>
         </div>
         <?php endif; ?>
