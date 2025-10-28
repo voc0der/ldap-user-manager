@@ -81,12 +81,10 @@ function curl_quick_text(string $url, int $connectTO=2, int $totalTO=3): ?string
     return (string)$resp;
 }
 function detect_public_ipv4(?string $hostForDns = null): ?string {
-    // 1) Env overrides
     foreach (['WG_EXTERNAL_IPV4','PUBLIC_IPV4','SERVER_PUBLIC_IP'] as $k) {
         $v = getenv($k);
         if ($v && is_public_ipv4($v)) return $v;
     }
-    // 2) Cache (15m)
     $cacheFile = '/tmp/lum_public_ipv4.json';
     $now = time();
     if (is_readable($cacheFile)) {
@@ -98,14 +96,12 @@ function detect_public_ipv4(?string $hostForDns = null): ?string {
             }
         }
     }
-    // 3) HTTP probes (IPv4)
     $candidates = [];
     $t = curl_quick_text('https://1.1.1.1/cdn-cgi/trace');
     if ($t && preg_match('/^ip=([0-9.]+)$/m', $t, $m) && is_public_ipv4($m[1])) $candidates[] = $m[1];
-    $r = curl_quick_text('https://api.ipify.org');         if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
-    $r = curl_quick_text('https://ipv4.icanhazip.com');    if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
-    $r = curl_quick_text('https://ifconfig.me/ip');        if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
-    // 4) DNS A of current host (last resort)
+    $r = curl_quick_text('https://api.ipify.org');      if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
+    $r = curl_quick_text('https://ipv4.icanhazip.com'); if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
+    $r = curl_quick_text('https://ifconfig.me/ip');     if ($r && is_public_ipv4(trim($r))) $candidates[] = trim($r);
     if ($hostForDns) { $a = @gethostbyname($hostForDns); if ($a && $a !== $hostForDns && is_public_ipv4($a)) $candidates[] = $a; }
     $ip = $candidates[0] ?? null;
     if ($ip) @file_put_contents($cacheFile, json_encode(['ip'=>$ip, 'ts'=>$now]));
@@ -133,11 +129,6 @@ function http_request(string $url, string $method='GET', ?string $body=null, arr
     curl_close($ch);
     return [$code >= 200 && $code < 300, $code, $err, (string)$resp];
 }
-function current_host_url(): string {
-    $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
-    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? '') === '443');
-    return ($https ? 'https://' : 'http://') . $host;
-}
 function parse_filter_keys(string $spec): array {
     $spec = strtolower(trim($spec));
     if ($spec === '') return [];
@@ -157,14 +148,14 @@ $showMenu = !in_array(strtolower((string)($_GET['render_menu'] ?? '1')), ['0','n
 $clientIp = get_client_ip() ?: '0.0.0.0';
 $isV4     = (bool)filter_var($clientIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
 
-$lanCidrs = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
+/* VPN wins over LAN */
+$lanCidrs       = ['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','127.0.0.1/32'];
 $inLanRfc1918   = $isV4 && ip_in_any_cidr($clientIp, $lanCidrs);
 
 $vpnSpec  = getenv('VPN_CIDR') ?: '10.20.40.0/24';
 $vpnCidrs = parse_cidr_list($vpnSpec);
 $onVpn    = $isV4 && !empty($vpnCidrs) && ip_in_any_cidr($clientIp, $vpnCidrs);
 
-// Final LAN = RFC1918 but NOT in VPN ranges
 $inLan    = $inLanRfc1918 && !$onVpn;
 
 $mtlsHeader   = strtolower((string)($_SERVER['HTTP_X_MTLS'] ?? ''));
@@ -235,7 +226,7 @@ $wgBaseList = parse_cidr_list($wgBaseSpec);
 $extIPv4   = detect_public_ipv4($hostNow);
 $extCIDR   = $extIPv4 ? ($extIPv4 . '/32') : null;
 
-/* Handle inline lease API call */
+/* Inline lease API */
 if (isset($_GET['do']) && $_GET['do'] === 'lease') {
     $target = $base . (strpos($base,'?')!==false ? '&' : '?') . 'add=' . rawurlencode($clientIp);
     $headers = [
@@ -286,7 +277,6 @@ elseif ($format === 'iframe') {
     $showMtlsRow    = empty($filterKeys) || isset($filterKeys['mtls']);
     $showLeasedRow  = empty($filterKeys) || isset($filterKeys['leased']);
 
-    // Show Troubleshoot chip only if all rendered are ❌ and VPN is ❌
     $flagsRendered = 0; $flagsNo = 0;
     if ($showLanRow)    { $flagsRendered++; if (!$inLan)         $flagsNo++; }
     if ($showVpnRow)    { $flagsRendered++; if (!$onVpn)         $flagsNo++; }
@@ -297,9 +287,10 @@ elseif ($format === 'iframe') {
     header('Content-Type: text/html; charset=utf-8');
     $selfLeaseUrl = $_SERVER['PHP_SELF'] . '?format=iframe&do=lease&lease_url=' . rawurlencode($base);
 
-    // Prebuild compact HTML for bubble
+    /* Bubble content + copy text */
     $baseHtml   = implode(', ', array_map(fn($c)=>'<code>'.h($c).'</code>', $wgBaseList));
     $appendHtml = $extCIDR ? ', <code><u>'.h($extCIDR).'</u></code>' : ', <code><u>x.x.x.x/32</u></code>';
+    $copyText   = implode(', ', $wgBaseList) . ($extCIDR ? ', ' . $extCIDR : ', x.x.x.x/32');
     ?>
     <!doctype html>
     <html>
@@ -336,12 +327,21 @@ elseif ($format === 'iframe') {
         .helpchip .q{ width:14px; height:14px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:800; }
         #tipBubble, #tipArrow{ position:fixed; z-index:2147483646; }
         #tipBubble{
-          max-width:min(90vw, 260px); padding:8px 9px; border-radius:10px;
+          max-width:min(90vw, 260px); padding:8px 9px; border-radius:10px; position:fixed;
           background: rgba(11,15,19,.98); color:#cfe9ff; border:1px solid var(--line);
           box-shadow: 0 10px 22px var(--glow), 0 0 12px rgba(0,180,255,.16);
           font-size:12px; letter-spacing:.2px; white-space:normal; text-align:left;
         }
         #tipArrow{ width:0; height:0; filter: drop-shadow(0 0 4px var(--glow)); }
+        .copybtn{
+          margin-left:6px; padding:0 6px; height:18px; line-height:18px;
+          border-radius:6px; border:1px solid var(--line); background:rgba(127,209,255,.12);
+          color:#d6f1ff; font-size:11px; font-weight:800; cursor:pointer;
+        }
+        .copynote{
+          position:absolute; right:8px; bottom:6px; font-size:11px; padding:2px 6px; border-radius:8px;
+          background:rgba(16,185,129,.18); color:#10b981; border:1px solid rgba(16,185,129,.4);
+        }
         .hidden{ display:none !important; }
       </style>
     </head>
@@ -352,7 +352,7 @@ elseif ($format === 'iframe') {
           <span class="label">
             Inside LAN
             <span class="tip" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false"
-              data-tip="<?php echo h('True if your client IP is private (RFC1918: 10/8, 172.16–31/12, 192.168/16) or localhost.'); ?>">i</span>
+              data-tip="<?php echo h('Private (RFC1918) or localhost — excludes VPN ranges.'); ?>">i</span>
           </span>
           <span class="<?php echo $inLan ? 'yes' : 'no'; ?>"><?php echo $inLan ? '✅' : '❌'; ?></span>
         </div>
@@ -367,13 +367,19 @@ elseif ($format === 'iframe') {
 
             <?php if (!$onVpn && $allRenderedNo): ?>
               <!-- Inline micro Troubleshoot chip, next to info icon -->
-              <button type="button" class="helpchip tip" aria-label="Troubleshoot VPN" data-tip-template="vpnHelpTpl">
+              <button
+                type="button"
+                class="helpchip tip"
+                aria-label="Troubleshoot VPN"
+                data-tip-template="vpnHelpTpl"
+                data-copytext="<?php echo h($copyText); ?>">
                 Troubleshoot <span class="q">?</span>
               </button>
               <template id="vpnHelpTpl">
                 <div>
                   <b>Add this to AllowedIPs on VPN profile</b><br/>
                   <?php echo $baseHtml . $appendHtml; ?>
+                  <button type="button" class="copybtn" data-copy="<?php echo h($copyText); ?>" aria-label="Copy to clipboard">⧉</button>
                 </div>
               </template>
             <?php endif; ?>
@@ -433,40 +439,106 @@ elseif ($format === 'iframe') {
         (function(){
           var openEl=null, bubble=document.getElementById('tipBubble'), arrow=document.getElementById('tipArrow');
           var margin=8, gap=8, aSize=7, hoverTO=null;
+
           function clamp(v,min,max){ return Math.max(min,Math.min(max,v)); }
+
+          function copyText(txt, inlineBtn){
+            if (!txt) return;
+            var done = function(){
+              try{
+                var note=document.createElement('div');
+                note.className='copynote'; note.textContent='Copied';
+                bubble.appendChild(note);
+                if (inlineBtn){ var prev=inlineBtn.textContent; inlineBtn.textContent='Copied!'; setTimeout(function(){ inlineBtn.textContent=prev; }, 900); }
+                setTimeout(function(){ if(note&&note.parentNode){ note.parentNode.removeChild(note);} }, 900);
+              }catch(_){}
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(txt).then(done).catch(function(){
+                try{
+                  var ta=document.createElement('textarea');
+                  ta.value=txt; ta.style.position='fixed'; ta.style.top='-1000px';
+                  document.body.appendChild(ta); ta.focus(); ta.select();
+                  document.execCommand('copy'); document.body.removeChild(ta); done();
+                }catch(_){}
+              });
+            } else {
+              try{
+                var ta=document.createElement('textarea');
+                ta.value=txt; ta.style.position='fixed'; ta.style.top='-1000px';
+                document.body.appendChild(ta); ta.focus(); ta.select();
+                document.execCommand('copy'); document.body.removeChild(ta); done();
+              }catch(_){}
+            }
+          }
+
           function place(el){
             var r=el.getBoundingClientRect(), vw=Math.max(document.documentElement.clientWidth,window.innerWidth||0);
             var vh=Math.max(document.documentElement.clientHeight,window.innerHeight||0);
+
             var html='', tplId=el.getAttribute('data-tip-template');
             if (tplId){ var tpl=document.getElementById(tplId); html=tpl?tpl.innerHTML:''; }
             else if (el.hasAttribute('data-tip-html')){ html=el.getAttribute('data-tip-html')||''; }
+
             if (html) bubble.innerHTML=html; else bubble.textContent=el.getAttribute('data-tip')||'';
             bubble.classList.remove('hidden'); arrow.classList.remove('hidden');
+
+            // Bind copy button (if present)
+            var cbtn = bubble.querySelector('.copybtn');
+            if (cbtn){
+              var toCopy = cbtn.getAttribute('data-copy') || '';
+              cbtn.addEventListener('click', function(ev){
+                ev.preventDefault(); ev.stopPropagation();
+                copyText(toCopy, cbtn);
+              });
+            }
+
             var bw=bubble.offsetWidth, bh=bubble.offsetHeight, cx=r.left+r.width/2;
             var top=r.top-gap-bh, placeTop=true; if (top<margin){ top=r.bottom+gap; placeTop=false; }
             var left=clamp(cx-bw/2, margin, vw-bw-margin);
             bubble.style.top=Math.round(top)+'px'; bubble.style.left=Math.round(left)+'px';
             var ax=clamp(cx, left+aSize+2, left+bw-aSize-2);
-            if (placeTop){ arrow.style.borderLeft=aSize+'px solid transparent'; arrow.style.borderRight=aSize+'px solid transparent';
+            if (placeTop){
+              arrow.style.borderLeft=aSize+'px solid transparent'; arrow.style.borderRight=aSize+'px solid transparent';
               arrow.style.borderBottom='0'; arrow.style.borderTop=aSize+'px solid var(--line)';
-              arrow.style.top=Math.round(top+bh)+'px'; arrow.style.left=Math.round(ax-aSize)+'px'; }
-            else { arrow.style.borderLeft=aSize+'px solid transparent'; arrow.style.borderRight=aSize+'px solid transparent';
+              arrow.style.top=Math.round(top+bh)+'px'; arrow.style.left=Math.round(ax-aSize)+'px';
+            } else {
+              arrow.style.borderLeft=aSize+'px solid transparent'; arrow.style.borderRight=aSize+'px solid transparent';
               arrow.style.borderTop='0'; arrow.style.borderBottom=aSize+'px solid var(--line)';
-              arrow.style.top=Math.round(top-aSize)+'px'; arrow.style.left=Math.round(ax-aSize)+'px'; }
+              arrow.style.top=Math.round(top-aSize)+'px'; arrow.style.left=Math.round(ax-aSize)+'px';
+            }
+
             el.setAttribute('aria-expanded','true');
+
+            // Auto-copy on open if the trigger provides data-copytext
+            var autoTxt = el.getAttribute('data-copytext');
+            if (autoTxt) { copyText(autoTxt); }
           }
+
           function close(){ if(!openEl) return; openEl.setAttribute('aria-expanded','false'); openEl=null; bubble.classList.add('hidden'); arrow.classList.add('hidden'); }
           function open(el){ if (openEl===el){ close(); } else { openEl=el; place(el); } }
+
           function handleOpen(ev){
-            var tip=ev.target.closest('.tip'); if(!tip){ var label=ev.target.closest('.label'); if(label) tip=label.querySelector('.tip'); }
+            // Don't close if clicking inside the bubble (enables copy button on mobile)
+            if (ev.target && ev.target.closest && ev.target.closest('#tipBubble')) { return; }
+            var tip=ev.target.closest('.tip');
             if (tip){ ev.preventDefault(); open(tip); } else { close(); }
           }
+
           document.addEventListener('pointerup', handleOpen, {passive:false});
           document.addEventListener('touchend',  handleOpen, {passive:false});
           document.addEventListener('click',     handleOpen, {passive:false});
+
           document.addEventListener('mouseover', function(ev){ var t=ev.target.closest('.tip'); if(!t) return; clearTimeout(hoverTO); open(t); });
           document.addEventListener('mouseout',  function(ev){ if (ev.target && ev.target.closest && ev.target.closest('.tip')) hoverTO=setTimeout(close,120); });
-          document.addEventListener('keydown',   function(ev){ if(ev.key==='Escape') close(); if((ev.key==='Enter'||ev.key===' ')&&document.activeElement&&document.activeElement.classList&&document.activeElement.classList.contains('tip')){ ev.preventDefault(); open(document.activeElement); } });
+
+          document.addEventListener('keydown',   function(ev){
+            if(ev.key==='Escape') close();
+            if((ev.key==='Enter'||ev.key===' ')&&document.activeElement&&document.activeElement.classList&&document.activeElement.classList.contains('tip')){
+              ev.preventDefault(); open(document.activeElement);
+            }
+          });
+
           window.addEventListener('resize', function(){ if(openEl) place(openEl); });
           window.addEventListener('scroll', function(){ if(openEl) place(openEl); }, {passive:true});
           window.addEventListener('blur', close);
