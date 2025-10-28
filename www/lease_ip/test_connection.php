@@ -290,7 +290,7 @@ elseif ($format === 'iframe') {
     /* Bubble content + copy text */
     $baseHtml   = implode(', ', array_map(fn($c)=>'<code>'.h($c).'</code>', $wgBaseList));
     $appendHtml = $extCIDR ? ', <code><u>'.h($extCIDR).'</u></code>' : ', <code><u>x.x.x.x/32</u></code>';
-    $copyText   = implode(', ', $wgBaseList) . ($extCIDR ? ', ' . $extCIDR : ', x.x.x.x/32');
+    $copyText   = ($extCIDR ? ', ' . $extCIDR : ', x.x.x.x/32');
     ?>
     <!doctype html>
     <html>
