@@ -343,6 +343,8 @@ elseif ($format === 'iframe') {
           background:rgba(16,185,129,.18); color:#10b981; border:1px solid rgba(16,185,129,.4);
         }
         .hidden{ display:none !important; }
+        /* minimal: plus icon spacing for Lease button */
+        .btn .ico{ display:inline-block; margin-right:6px; font-weight:900; line-height:1; }
       </style>
     </head>
     <body>
@@ -372,8 +374,7 @@ elseif ($format === 'iframe') {
                 class="helpchip tip"
                 aria-label="Troubleshoot VPN"
                 data-tip-template="vpnHelpTpl"
-                Troubleshoot <span class="q">?</span>
-              </button>
+              ><span class="q">?</span> Troubleshoot</button>
               <template id="vpnHelpTpl">
                 <div>
                   <b>Add this to AllowedIPs on VPN profile</b><br/>
@@ -409,7 +410,7 @@ elseif ($format === 'iframe') {
           </span>
           <span class="val">
             <?php if ($allNo && $isV4): ?>
-              <a id="leaseBtn" class="btn" href="<?php echo h($selfLeaseUrl); ?>" role="button" aria-label="Lease this IP">Lease this IP</a>
+              <a id="leaseBtn" class="btn" href="<?php echo h($selfLeaseUrl); ?>" role="button" aria-label="Lease this IP"><span class="ico" aria-hidden="true">+</span>Lease this IP</a>
             <?php endif; ?>
             <span class="<?php echo $isWhitelisted ? 'yes' : 'no'; ?>"><?php echo $isWhitelisted ? '✅' : '❌'; ?></span>
           </span>
