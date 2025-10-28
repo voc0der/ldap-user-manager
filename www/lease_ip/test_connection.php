@@ -372,7 +372,6 @@ elseif ($format === 'iframe') {
                 class="helpchip tip"
                 aria-label="Troubleshoot VPN"
                 data-tip-template="vpnHelpTpl"
-                data-copytext="<?php echo h($copyText); ?>">
                 Troubleshoot <span class="q">?</span>
               </button>
               <template id="vpnHelpTpl">
@@ -509,10 +508,6 @@ elseif ($format === 'iframe') {
             }
 
             el.setAttribute('aria-expanded','true');
-
-            // Auto-copy on open if the trigger provides data-copytext
-            var autoTxt = el.getAttribute('data-copytext');
-            if (autoTxt) { copyText(autoTxt); }
           }
 
           function close(){ if(!openEl) return; openEl.setAttribute('aria-expanded','false'); openEl=null; bubble.classList.add('hidden'); arrow.classList.add('hidden'); }
